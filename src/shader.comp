@@ -1,0 +1,80 @@
+#version 450
+
+#extension GL_KHR_shader_subgroup_arithmetic: enable
+#extension GL_KHR_shader_subgroup_vote: enable
+
+layout (local_size_x = 8, local_size_y = 8) in;
+
+layout(push_constant) uniform PushConstants {
+    uint rect_count;
+} constants;
+
+struct Rect {
+    vec2 pos;
+    vec2 size;
+    vec4 bg_color;
+    uint parent_idx;
+    uint children_start;
+    uint children_end;
+};
+
+layout(set = 0, binding = 0) readonly buffer Rects {
+    Rect data[];
+} rects;
+
+layout (set = 0, binding = 1, r32ui) uniform uimage2D image;
+
+void main() {
+    uvec2 px = gl_GlobalInvocationID.xy;
+    uvec2 px_start = gl_WorkGroupID.xy * gl_WorkGroupSize.xy;
+    uvec2 px_end = px_start + gl_WorkGroupSize.xy;
+    uvec2 offset = uvec2(0);
+    uint rect_idx = 0;
+    uint current_idx = 0;
+    uint end_idx = 1;
+    bool shared_search = true;
+
+    while (current_idx < end_idx) {
+        Rect rect = rects.data[min(current_idx + gl_SubgroupInvocationID, end_idx - 1)];
+        uvec2 pos = offset + uvec2(rect.pos);
+        uvec2 pos_end = pos + uvec2(rect.size);
+        bool inside = all(greaterThanEqual(px_start, pos)) && all(lessThanEqual(px_end, pos + rect.size));
+        uint first_inside = subgroupMin(inside ? gl_SubgroupInvocationID : 0xFFFFFFFF);
+        if (first_inside != 0xFFFFFFFF) {
+            current_idx += first_inside;
+            Rect rect = rects.data[current_idx];
+            uvec2 pos = offset + uvec2(rect.pos);
+            offset = pos;
+            rect_idx = current_idx + 1;
+            current_idx = rect.children_start;
+            end_idx = rect.children_end;
+        } else {
+            bool intersects = !(px_end.x < pos.x || px_start.x > pos_end.x || px_end.y < pos.y || px_start.y > pos_end.y);
+            uint first_intersecting = subgroupMin(intersects ? gl_SubgroupInvocationID : 0xFFFFFFFF);
+            current_idx += min(first_intersecting, gl_SubgroupSize);
+            if (first_intersecting != 0xFFFFFFFF) {
+                break;
+            }
+        }
+    }
+
+    while (current_idx < end_idx) {
+        Rect rect = rects.data[current_idx];
+        uvec2 pos = offset + uvec2(rect.pos);
+        if (all(greaterThanEqual(px, pos)) && all(lessThan(px, pos + rect.size))) {
+            offset = pos;
+            rect_idx = current_idx + 1;
+            current_idx = rect.children_start;
+            end_idx = rect.children_end;
+        } else {
+            current_idx += 1;
+        }
+    }
+
+    if (rect_idx != 0) {
+        Rect rect = rects.data[rect_idx - 1];
+        uvec4 icolor = uvec4(rect.bg_color * 255.0);
+        uint color = (icolor.a << 24) | (icolor.b << 16) | (icolor.g << 8) | (icolor.r);
+        imageStore(image, ivec2(gl_GlobalInvocationID.xy), uvec4(color));
+    }
+}
