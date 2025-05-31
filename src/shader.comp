@@ -5,30 +5,31 @@
 
 layout (local_size_x = 8, local_size_y = 8) in;
 
-layout(push_constant) uniform PushConstants {
-    uint rect_count;
-} constants;
-
 struct Rect {
     vec2 pos;
     vec2 size;
     vec4 bg_color;
+    uvec2 tex_position;
     uint parent_idx;
     uint children_start;
     uint children_end;
+    uint fill_kind;
 };
 
 layout(set = 0, binding = 0) readonly buffer Rects {
     Rect data[];
 } rects;
 
-layout (set = 0, binding = 1, r32ui) uniform uimage2D image;
+layout (set = 0, binding = 1, rgba8) uniform image2D image;
+
+layout (set = 0, binding = 2, rgba8) uniform image2D atlas;
 
 void main() {
     uvec2 px = gl_GlobalInvocationID.xy;
     uvec2 px_start = gl_WorkGroupID.xy * gl_WorkGroupSize.xy;
     uvec2 px_end = px_start + gl_WorkGroupSize.xy;
     uvec2 offset = uvec2(0);
+    uvec2 pos_in_rect = uvec2(0);
     uint rect_idx = 0;
     uint current_idx = 0;
     uint end_idx = 1;
@@ -45,6 +46,7 @@ void main() {
             Rect rect = rects.data[current_idx];
             uvec2 pos = offset + uvec2(rect.pos);
             offset = pos;
+            pos_in_rect = px - pos;
             rect_idx = current_idx + 1;
             current_idx = rect.children_start;
             end_idx = rect.children_end;
@@ -63,6 +65,7 @@ void main() {
         uvec2 pos = offset + uvec2(rect.pos);
         if (all(greaterThanEqual(px, pos)) && all(lessThan(px, pos + rect.size))) {
             offset = pos;
+            pos_in_rect = px - pos;
             rect_idx = current_idx + 1;
             current_idx = rect.children_start;
             end_idx = rect.children_end;
@@ -71,10 +74,24 @@ void main() {
         }
     }
 
-    if (rect_idx != 0) {
+    vec3 color = vec3(0.0);
+    vec3 alphas = vec3(0.0);
+    while (all(lessThan(alphas, vec3(1.0))) && rect_idx != 0) { 
         Rect rect = rects.data[rect_idx - 1];
-        uvec4 icolor = uvec4(rect.bg_color * 255.0);
-        uint color = (icolor.a << 24) | (icolor.b << 16) | (icolor.g << 8) | (icolor.r);
-        imageStore(image, ivec2(gl_GlobalInvocationID.xy), uvec4(color));
+        vec3 rect_color;
+        vec3 rect_alphas;
+        if (rect.fill_kind == 0) {
+            rect_color = rect.bg_color.rgb;
+            rect_alphas = vec3(rect.bg_color.a);
+        } else {
+            rect_alphas = imageLoad(atlas, ivec2(rect.tex_position + pos_in_rect)).rgb;
+            rect_color = rect.bg_color.rgb;
+        }
+        vec3 a = rect_alphas * (vec3(1.0) - alphas);
+        color += rect_color * a;
+        alphas += a;
+        rect_idx = rect.parent_idx;
     }
+    
+    imageStore(image, ivec2(gl_GlobalInvocationID.xy), vec4(color, 1.0));
 }
