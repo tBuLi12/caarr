@@ -6,8 +6,8 @@ use etagere::{euclid::Size2D, Size};
 use rect_storage::RefIdx;
 use std::{cell::RefCell, collections::HashMap, error::Error, ffi::CStr, mem, ptr, time::Instant};
 use winit::{
-    event::WindowEvent,
-    keyboard,
+    event::{ElementState, WindowEvent},
+    keyboard::{self, NamedKey},
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     window::WindowAttributes,
 };
@@ -1129,9 +1129,16 @@ impl<A: App> winit::application::ApplicationHandler<()> for WinitApp<A> {
                 event,
                 is_synthetic,
             } => {
+                if event.state != ElementState::Pressed {
+                    return;
+                }
+
                 match event.logical_key {
                     keyboard::Key::Character(str) => {
                         self.app.on_key_event(&str);
+                    }
+                    keyboard::Key::Named(NamedKey::Space) => {
+                        self.app.on_key_event(" ");
                     }
                     _ => {}
                 }
@@ -1139,8 +1146,6 @@ impl<A: App> winit::application::ApplicationHandler<()> for WinitApp<A> {
                 STORAGE.with_borrow(|storage| {
                     TLS.with_borrow_mut(|tls| {
                         let vulkan_ctx = &mut tls.as_mut().unwrap().vk_ctx;
-
-                        // eprintln!("{:?}", storage.allocated_span());
 
                         vulkan_ctx.update_rectangles(
                             storage.allocated_span(),
@@ -1153,6 +1158,11 @@ impl<A: App> winit::application::ApplicationHandler<()> for WinitApp<A> {
             _ => {}
         }
     }
+}
+
+pub fn debug() {
+    STORAGE.with_borrow(|s| eprintln!("{:?}", s.allocated_span()));
+    STORAGE.with_borrow(|s| eprintln!("{:?}", s.allocated_ref_span()));
 }
 
 #[derive(Clone, Copy)]
@@ -1170,18 +1180,14 @@ struct VkRect {
 
 pub struct TextLine {
     pub rect: Rect,
-    line: RenderedLine,
+    clusters: Vec<Cluster>,
 }
 
 impl TextLine {
     pub fn new() -> Self {
         TextLine {
             rect: Rect::new(),
-            line: RenderedLine {
-                glyphs: vec![],
-                clusters: vec![],
-                x_height: 0.0,
-            },
+            clusters: vec![],
         }
     }
 
@@ -1225,7 +1231,11 @@ impl TextLine {
         self.rect
             .set_size((right - left) as u32 + 10, height as u32);
 
-        self.line = line;
+        self.clusters = line.clusters;
+    }
+
+    pub fn clusters(&self) -> &[Cluster] {
+        &self.clusters
     }
 }
 
@@ -1438,11 +1448,7 @@ impl Rect {
         let rect = self.new_child();
         TextLine {
             rect,
-            line: RenderedLine {
-                glyphs: vec![],
-                clusters: vec![],
-                x_height: 0.0,
-            },
+            clusters: vec![],
         }
     }
 

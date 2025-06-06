@@ -138,10 +138,14 @@ impl RefAllocator {
     fn resolve(&mut self, ref_idx: RefIdx) -> &mut RefData {
         &mut self.items[ref_idx.inner as usize]
     }
+
+    fn allocated_span(&self) -> &[RefData] {
+        &self.items
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
-struct RefData {
+pub struct RefData {
     ref_count: u32,
     rect_idx: RectIdx,
 }
@@ -228,35 +232,20 @@ impl RectStorage {
         unsafe {
             let ref_data = *self.ref_allocator.resolve(ref_idx);
             let rect_data = &mut *self.rect_allocator.resolve(ref_data.rect_idx);
-            let child_rect_data = &mut *self.resolve_rect(child_ref_idx);
+            let child_ref_data = *self.ref_allocator.resolve(child_ref_idx);
+            let child_rect_data = &mut *self.rect_allocator.resolve(child_ref_data.rect_idx);
             child_rect_data.parent_idx = ref_data.rect_idx.inner + 1;
-
-            let child_rect_data = *child_rect_data;
-
-            self.rect_allocator
-                .resolve(RectIdx {
-                    inner: rect_data.children_end,
-                })
-                .write(child_rect_data);
-
-            for child_child_idx in child_rect_data.children_start..child_rect_data.children_end {
-                let child_child = &mut *self.rect_allocator.resolve(RectIdx {
-                    inner: child_child_idx,
-                });
-                child_child.parent_idx = rect_data.children_end + 1;
-            }
-
-            self.ref_allocator.resolve(child_ref_idx).rect_idx = RectIdx {
-                inner: rect_data.children_end,
-            };
             rect_data.children_end += 1;
+            let dst = rect_data.children_end - 1;
+
+            self.move_rect(child_ref_data.rect_idx, RectIdx { inner: dst });
         }
     }
 
     pub fn clear_children(&mut self, ref_idx: RefIdx) {
         unsafe {
             let rect_data = &mut *self.resolve_rect(ref_idx);
-            self.unparent(rect_data.children_start..rect_data.children_end);
+            self.unlink_from_parent(rect_data.children_start..rect_data.children_end);
             rect_data.children_end = rect_data.children_start;
         }
     }
@@ -282,6 +271,27 @@ impl RectStorage {
         }
     }
 
+    unsafe fn move_rect(&mut self, src: RectIdx, dst: RectIdx) {
+        debug_assert_ne!(src.inner, dst.inner);
+
+        let source = self.rect_allocator.resolve(src);
+        let src_data = source.read();
+        self.rect_allocator.resolve(dst).write(src_data);
+
+        for child_child_idx in src_data.children_start..src_data.children_end {
+            let child_child = &mut *self.rect_allocator.resolve(RectIdx {
+                inner: child_child_idx,
+            });
+            child_child.parent_idx = dst.inner + 1;
+        }
+
+        if let Some(ref_idx) = src_data.ref_idx.checked_sub(1) {
+            let src_ref_idx = RefIdx { inner: ref_idx };
+            let src_ref_data = self.ref_allocator.resolve(src_ref_idx);
+            src_ref_data.rect_idx = dst;
+        }
+    }
+
     fn ensure_not_full(&mut self, ref_idx: RefIdx) {
         unsafe {
             let rect = self.resolve_rect(ref_idx).read();
@@ -298,21 +308,18 @@ impl RectStorage {
                 //     new_length
                 // );
                 let new_children_start = self.rect_allocator.alloc(new_length);
-                let mut new_children = self.rect_allocator.resolve(new_children_start);
-                // eprintln!("new range: {:?}", new_children_start);
-                let old_children = self.rect_allocator.resolve(RectIdx {
-                    inner: rect.children_start,
-                });
-                // eprintln!("copying {child_count} children");
-                eprintln!(
-                    "old children_idx: {:?}, new children: {:?}, child_count: {}",
-                    rect.children_start, new_children_start.inner, child_count
-                );
-                eprintln!(
-                    "old children: {:?}, new children: {:?}, child_count: {}",
-                    old_children, new_children, child_count
-                );
-                ptr::copy_nonoverlapping(old_children, new_children, child_count as usize);
+
+                for offset in 0..child_count {
+                    self.move_rect(
+                        RectIdx {
+                            inner: rect.children_start + offset,
+                        },
+                        RectIdx {
+                            inner: new_children_start.inner + offset,
+                        },
+                    );
+                }
+
                 if child_count != 0 {
                     self.rect_allocator.free(
                         RectIdx {
@@ -320,26 +327,6 @@ impl RectStorage {
                         },
                         child_count,
                     );
-                }
-
-                for idx in new_children_start.inner..(new_children_start.inner + child_count) {
-                    let child = &mut *new_children;
-                    if let Some(ref_idx) = child.ref_idx.checked_sub(1) {
-                        // eprintln!("updating ref {ref_idx}");
-                        self.ref_allocator
-                            .resolve(RefIdx { inner: ref_idx })
-                            .rect_idx = RectIdx { inner: idx };
-                    }
-
-                    for child_child_idx in child.children_start..child.children_end {
-                        let child_child = &mut *self.rect_allocator.resolve(RectIdx {
-                            inner: child_child_idx,
-                        });
-                        child_child.parent_idx = idx + 1;
-                        // eprintln!("setting child child parent_idx to {}", idx + 1);
-                    }
-
-                    new_children = new_children.add(1);
                 }
 
                 {
@@ -356,18 +343,23 @@ impl RectStorage {
         let rect_data = unsafe { self.rect_allocator.resolve(rect_idx).read() };
         unsafe { self.rect_allocator.free(rect_idx, 1) };
 
-        self.unparent(rect_data.children_start..rect_data.children_end);
+        self.unlink_from_parent(rect_data.children_start..rect_data.children_end);
     }
 
-    fn unparent(&mut self, range: Range<u32>) {
+    fn unlink_from_parent(&mut self, range: Range<u32>) {
         for child_idx in range {
             let child_data =
                 unsafe { &mut *self.rect_allocator.resolve(RectIdx { inner: child_idx }) };
             child_data.parent_idx = 0;
 
             if child_data.ref_idx == 0 {
-                drop(child_data);
-                self.free_rect(RectIdx { inner: child_idx });
+                let range = child_data.children_start..child_data.children_end;
+                self.unlink_from_parent(range);
+            } else {
+                let new_idx = self.rect_allocator.alloc(1);
+                unsafe {
+                    self.move_rect(RectIdx { inner: child_idx }, new_idx);
+                }
             }
         }
     }
@@ -406,6 +398,10 @@ impl RectStorage {
 
     pub fn allocated_span(&self) -> &[RectData] {
         self.rect_allocator.allocated_span()
+    }
+
+    pub fn allocated_ref_span(&self) -> &[RefData] {
+        self.ref_allocator.allocated_span()
     }
 
     // pub fn debug(&mut self, rect: &Rect) {
