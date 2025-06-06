@@ -156,7 +156,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
                         height,
                         width,
                     })
-                    .format(vk::Format::R32_UINT)
+                    .format(vk::Format::R8G8B8A8_UNORM)
                     .image_type(vk::ImageType::TYPE_2D)
                     .samples(vk::SampleCountFlags::TYPE_1)
                     .mip_levels(1)
@@ -183,7 +183,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         let view_create_info = vk::ImageViewCreateInfo::default()
             .image(image)
             .view_type(vk::ImageViewType::TYPE_2D)
-            .format(vk::Format::R32_UINT)
+            .format(vk::Format::R8G8B8A8_UNORM)
             .subresource_range(
                 vk::ImageSubresourceRange::default()
                     .aspect_mask(vk::ImageAspectFlags::COLOR)

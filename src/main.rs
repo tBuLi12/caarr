@@ -54,8 +54,8 @@ fn main() {
     // }];
 
     unsafe {
-        // compute_tree::unsafe_main(&rectangles, width, height);
-        graphics_pipeline::unsafe_main(&rectangles, width, height);
+        compute_tree::unsafe_main(&rectangles, width, height);
+        // graphics_pipeline::unsafe_main(&rectangles, width, height);
     }
 }
 
