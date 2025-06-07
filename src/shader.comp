@@ -34,40 +34,40 @@ void main() {
     uint end_idx = 1;
     bool shared_search = true;
 
-    while (current_idx < end_idx) {
-        Rect rect = rects.data[min(current_idx + gl_SubgroupInvocationID, end_idx - 1)];
-        uvec2 pos = offset + uvec2(rect.pos);
-        uvec2 pos_end = pos + uvec2(rect.size);
-        bool inside = all(greaterThanEqual(px_start, pos)) && all(lessThanEqual(px_end, pos + rect.size));
-        uint first_inside = subgroupMin(inside ? gl_SubgroupInvocationID : 0xFFFFFFFF);
-        if (first_inside != 0xFFFFFFFF) {
-            current_idx += first_inside;
-            Rect rect = rects.data[current_idx];
-            uvec2 pos = offset + uvec2(rect.pos);
-            offset = pos;
-            rect_idx = current_idx + 1;
-            current_idx = rect.children_start;
-            end_idx = rect.children_end;
-        } else {
-            bool intersects = !(px_end.x < pos.x || px_start.x > pos_end.x || px_end.y < pos.y || px_start.y > pos_end.y);
-            uint first_intersecting = subgroupMin(intersects ? gl_SubgroupInvocationID : 0xFFFFFFFF);
-            current_idx += min(first_intersecting, gl_SubgroupSize);
-            if (first_intersecting != 0xFFFFFFFF) {
-                break;
-            }
-        }
-    }
+    // while (current_idx < end_idx) {
+    //     Rect rect = rects.data[min(current_idx + gl_SubgroupInvocationID, end_idx - 1)];
+    //     uvec2 pos = offset + uvec2(rect.pos);
+    //     uvec2 pos_end = pos + uvec2(rect.size);
+    //     bool inside = all(greaterThanEqual(px_start, pos)) && all(lessThanEqual(px_end, pos + rect.size));
+    //     uint first_inside = subgroupMin(inside ? gl_SubgroupInvocationID : 0xFFFFFFFF);
+    //     if (first_inside != 0xFFFFFFFF) {
+    //         current_idx += first_inside;
+    //         Rect rect = rects.data[current_idx];
+    //         uvec2 pos = offset + uvec2(rect.pos);
+    //         offset = pos;
+    //         rect_idx = current_idx + 1;
+    //         current_idx = rect.children_start;
+    //         end_idx = rect.children_end;
+    //     } else {
+    //         bool intersects = !(px_end.x < pos.x || px_start.x > pos_end.x || px_end.y < pos.y || px_start.y > pos_end.y);
+    //         uint first_intersecting = subgroupMin(intersects ? gl_SubgroupInvocationID : 0xFFFFFFFF);
+    //         current_idx += min(first_intersecting, gl_SubgroupSize);
+    //         if (first_intersecting != 0xFFFFFFFF) {
+    //             break;
+    //         }
+    //     }
+    // }
 
     while (current_idx < end_idx) {
         Rect rect = rects.data[current_idx];
         uvec2 pos = offset + uvec2(rect.pos);
+        current_idx += 1;
+        
         if (all(greaterThanEqual(px, pos)) && all(lessThan(px, pos + rect.size))) {
             offset = pos;
-            rect_idx = current_idx + 1;
+            rect_idx = current_idx;
             current_idx = rect.children_start;
             end_idx = rect.children_end;
-        } else {
-            current_idx += 1;
         }
     }
 

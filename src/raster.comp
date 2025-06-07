@@ -1,0 +1,47 @@
+#version 450
+
+#extension GL_KHR_shader_subgroup_arithmetic: enable
+#extension GL_KHR_shader_subgroup_vote: enable
+
+layout (local_size_x = 64) in;
+
+struct Rect {
+    vec2 pos;
+    vec2 size;
+    vec4 bg_color;
+    uint parent_idx;
+    uint children_start;
+    uint children_end;
+};
+
+layout(set = 0, binding = 0) readonly buffer Rects {
+    Rect data[];
+} rects;
+
+layout (set = 0, binding = 1, rgba8) uniform image2D image;
+
+layout(set = 0, binding = 2) writeonly buffer VerticalRaster {
+    uint data[];
+} vertical;
+
+layout(set = 0, binding = 3) writeonly buffer HorizontalRaster {
+    uint data[];
+} horizontal;
+
+void main() {
+    // uint rects_count = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+    uint rects_count = 10000;
+    uint rect_idx = gl_GlobalInvocationID.x;
+    Rect rect = rects.data[rect_idx];
+    uvec2 pos = uvec2(rect.pos);
+    uvec2 size = uvec2(rect.size);
+    
+    for (uint i = 0; i < size.x; i++) {
+        atomicOr(horizontal.data[((pos.x + i) * rects_count) + (rect_idx / 32)], 1 << (rect_idx % 32));
+    }
+
+    for (uint i = 0; i < size.y; i++) {
+        atomicOr(vertical.data[((pos.y + i) * rects_count) + (rect_idx / 32)], 1 << (rect_idx % 32));
+    }
+}
+  
