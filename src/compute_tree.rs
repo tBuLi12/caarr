@@ -31,13 +31,18 @@ pub fn find_memorytype_index(
 }
 
 fn rects_to_gpu(rects: Vec<Rect>) -> Vec<GpuRect> {
-    fn rects_to_gpu_rec(gpu_rects: &mut Vec<GpuRect>, rects: &[Rect], parent_idx: u32) {
+    fn rects_to_gpu_rec(
+        gpu_rects: &mut Vec<GpuRect>,
+        rects: &[Rect],
+        parent_idx: u32,
+        parent_pos: [f32; 2],
+    ) {
         let start = gpu_rects.len();
 
         for rect in rects {
             gpu_rects.push(GpuRect {
                 bg_color: rect.bg_color,
-                pos: rect.pos,
+                pos: [rect.pos[0] + parent_pos[0], rect.pos[1] + parent_pos[1]],
                 size: rect.size,
                 children: [0, 0],
                 parent_idx,
@@ -46,14 +51,15 @@ fn rects_to_gpu(rects: Vec<Rect>) -> Vec<GpuRect> {
 
         for (gpu_rect_idx, rect) in (start..).zip(rects) {
             let start = gpu_rects.len() as u32;
+            let pos = gpu_rects[gpu_rect_idx].pos;
             gpu_rects[gpu_rect_idx].children = [start, start + rect.children.len() as u32];
-            rects_to_gpu_rec(gpu_rects, &rect.children, gpu_rect_idx as u32 + 1);
+            rects_to_gpu_rec(gpu_rects, &rect.children, gpu_rect_idx as u32 + 1, pos);
         }
     }
 
     let mut gpu_rects = vec![];
 
-    rects_to_gpu_rec(&mut gpu_rects, &rects, 0);
+    rects_to_gpu_rec(&mut gpu_rects, &rects, 0, [0.0, 0.0]);
 
     gpu_rects
 }
@@ -65,6 +71,40 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         pos: [0.0, 0.0],
         size: [width as f32, height as f32],
     }]);
+    println!("{:?}", rectangles.len());
+    // println!("{:?}", rectangles[5]);
+    // println!("{:?}", rectangles[7930]);
+    // println!("{:?}", rectangles[7931]);
+    // return;
+    // {
+    //     let mut current_idx: usize = 0;
+    //     let mut end_idx: usize = 1;
+    //     let mut rect_idx: usize = 0;
+
+    //     while (current_idx < end_idx) {
+    //         let mut rect = rectangles[current_idx];
+    //         // if (all(greaterThanEqual(px, pos)) && all(lessThan(px, pos + rect.size))) {
+    //         // pos_in_rect = px - pos;
+    //         rect_idx = current_idx + 1;
+    //         current_idx = rect.children[0] as usize;
+    //         end_idx = rect.children[1] as usize;
+    //         // } else {
+    //         //     current_idx += 1;
+    //         // }
+
+    //         while (current_idx >= end_idx && rect_idx != 0) {
+    //             current_idx = rect_idx;
+    //             // eprintln!("    current_idx: {}", current_idx);
+    //             let parent = rectangles[current_idx - 1];
+    //             rect_idx = parent.parent_idx as usize;
+    //             if (parent.parent_idx == 0) {
+    //                 end_idx = 1;
+    //             } else {
+    //                 end_idx = rectangles[parent.parent_idx as usize - 1].children[1] as usize;
+    //             }
+    //         }
+    //     }
+    // }
 
     let entry = ash::Entry::load().unwrap();
 
@@ -86,7 +126,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
 
     physical_devices.sort_by_key(|&device| {
         match instance.get_physical_device_properties(device).device_type {
-            vk::PhysicalDeviceType::DISCRETE_GPU => 0,
+            vk::PhysicalDeviceType::DISCRETE_GPU => 6,
             vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
             vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
             vk::PhysicalDeviceType::CPU => 3,
@@ -99,6 +139,16 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         .get(0)
         .copied()
         .expect("No physical devices found");
+
+    eprintln!(
+        "physical device name: {}",
+        instance
+            .get_physical_device_properties(physical_device)
+            .device_name_as_c_str()
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
 
     let queue_family_idx = instance
         .get_physical_device_queue_family_properties(physical_device)
@@ -278,7 +328,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
                 find_memorytype_index(
                     &requirements,
                     &memory_properties,
-                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
                 )
                 .unwrap(),
             );
@@ -325,11 +375,79 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         buffer
     };
 
+    let verical_raster_buffer = {
+        let size = height as u64 * 10_000 as u64 * 4;
+        let buffer = device
+            .create_buffer(
+                &vk::BufferCreateInfo::default().size(size).usage(
+                    vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                ),
+                None,
+            )
+            .unwrap();
+
+        let requirements = device.get_buffer_memory_requirements(buffer);
+        let allocate_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(requirements.size)
+            .memory_type_index(
+                find_memorytype_index(
+                    &requirements,
+                    &memory_properties,
+                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                )
+                .unwrap(),
+            );
+
+        let memory = device.allocate_memory(&allocate_info, None).unwrap();
+        device.bind_buffer_memory(buffer, memory, 0).unwrap();
+
+        buffer
+    };
+
+    let horizontal_raster_buffer = {
+        let size = width as u64 * 10_000 as u64 * 4;
+        let buffer = device
+            .create_buffer(
+                &vk::BufferCreateInfo::default().size(size).usage(
+                    vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                ),
+                None,
+            )
+            .unwrap();
+
+        let requirements = device.get_buffer_memory_requirements(buffer);
+        let allocate_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(requirements.size)
+            .memory_type_index(
+                find_memorytype_index(
+                    &requirements,
+                    &memory_properties,
+                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                )
+                .unwrap(),
+            );
+
+        let memory = device.allocate_memory(&allocate_info, None).unwrap();
+        device.bind_buffer_memory(buffer, memory, 0).unwrap();
+
+        buffer
+    };
+
     let compute_shader = {
         device
             .create_shader_module(
                 &vk::ShaderModuleCreateInfo::default()
                     .code(bytemuck::cast_slice(include_bytes!("./shader.comp.spv"))),
+                None,
+            )
+            .unwrap()
+    };
+
+    let raster_shader = {
+        device
+            .create_shader_module(
+                &vk::ShaderModuleCreateInfo::default()
+                    .code(bytemuck::cast_slice(include_bytes!("./raster.comp.spv"))),
                 None,
             )
             .unwrap()
@@ -345,6 +463,16 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
             .binding(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .descriptor_count(1),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(2)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(3)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1),
     ];
 
@@ -377,17 +505,31 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         .stage(shader_stage_create_info)
         .layout(pipeline_layout);
 
+    let raster_pipeline_info = vk::ComputePipelineCreateInfo::default()
+        .stage(
+            vk::PipelineShaderStageCreateInfo::default()
+                .module(raster_shader)
+                .name(shader_entry_name)
+                .stage(vk::ShaderStageFlags::COMPUTE),
+        )
+        .layout(pipeline_layout);
+
     let mut pipelines = device
-        .create_compute_pipelines(vk::PipelineCache::null(), &[compute_pipeline_info], None)
+        .create_compute_pipelines(
+            vk::PipelineCache::null(),
+            &[compute_pipeline_info, raster_pipeline_info],
+            None,
+        )
         .unwrap()
         .into_iter();
 
     let pipeline = pipelines.next().unwrap();
+    let raster_pipeline = pipelines.next().unwrap();
 
     let pool_sizes = [
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_BUFFER,
-            descriptor_count: 1,
+            descriptor_count: 3,
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_IMAGE,
@@ -429,6 +571,20 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
                 .image_info(&[vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::GENERAL)
                     .image_view(view)]),
+            vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_set)
+                .dst_binding(2)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&[vk::DescriptorBufferInfo::default()
+                    .buffer(verical_raster_buffer)
+                    .range(vk::WHOLE_SIZE)]),
+            vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_set)
+                .dst_binding(3)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&[vk::DescriptorBufferInfo::default()
+                    .buffer(horizontal_raster_buffer)
+                    .range(vk::WHOLE_SIZE)]),
         ],
         &[],
     );
@@ -437,6 +593,160 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         .command_buffer_count(1)
         .command_pool(command_pool)
         .level(vk::CommandBufferLevel::PRIMARY);
+
+    for i in 0..10 {
+        let command_buffer = device
+            .allocate_command_buffers(&command_buffer_allocate_info)
+            .unwrap()[0];
+
+        let fence = device
+            .create_fence(&vk::FenceCreateInfo::default(), None)
+            .unwrap();
+
+        device
+            .begin_command_buffer(
+                command_buffer,
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )
+            .unwrap();
+
+        // device.cmd_pipeline_barrier(
+        //     command_buffer,
+        //     vk::PipelineStageFlags::ALL_COMMANDS,
+        //     vk::PipelineStageFlags::ALL_COMMANDS,
+        //     vk::DependencyFlags::empty(),
+        //     &[],
+        //     &[],
+        //     &[vk::ImageMemoryBarrier::default()
+        //         .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+        //         .old_layout(vk::ImageLayout::UNDEFINED)
+        //         .new_layout(vk::ImageLayout::GENERAL)
+        //         .subresource_range(
+        //             vk::ImageSubresourceRange::default()
+        //                 .aspect_mask(vk::ImageAspectFlags::COLOR)
+        //                 .layer_count(1)
+        //                 .level_count(1),
+        //         )
+        //         .image(image)],
+        // );
+
+        // device.cmd_clear_color_image(
+        //     command_buffer,
+        //     image,
+        //     vk::ImageLayout::GENERAL,
+        //     &vk::ClearColorValue {
+        //         uint32: [0, 0, 0, 0],
+        //     },
+        //     &[vk::ImageSubresourceRange::default()
+        //         .aspect_mask(vk::ImageAspectFlags::COLOR)
+        //         .layer_count(1)
+        //         .level_count(1)],
+        // );
+
+        device.cmd_pipeline_barrier(
+            command_buffer,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[vk::ImageMemoryBarrier::default()
+                .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::GENERAL)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .layer_count(1)
+                        .level_count(1),
+                )
+                .image(image)],
+        );
+
+        // device.cmd_bind_pipeline(
+        //     command_buffer,
+        //     vk::PipelineBindPoint::COMPUTE,
+        //     raster_pipeline,
+        // );
+
+        // device.cmd_bind_descriptor_sets(
+        //     command_buffer,
+        //     vk::PipelineBindPoint::COMPUTE,
+        //     pipeline_layout,
+        //     0,
+        //     &[descriptor_set],
+        //     &[],
+        // );
+
+        // device.cmd_push_constants(
+        //     command_buffer,
+        //     pipeline_layout,
+        //     vk::ShaderStageFlags::COMPUTE,
+        //     0,
+        //     bytemuck::bytes_of(&(rectangles.len() as u32)),
+        // );
+
+        // device.cmd_dispatch(command_buffer, rectangles.len().div_ceil(64) as u32, 1, 1);
+
+        device.cmd_pipeline_barrier(
+            command_buffer,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[
+                vk::BufferMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::SHADER_READ)
+                    .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
+                    .buffer(verical_raster_buffer)
+                    .size(vk::WHOLE_SIZE),
+                vk::BufferMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::SHADER_READ)
+                    .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
+                    .buffer(horizontal_raster_buffer)
+                    .size(vk::WHOLE_SIZE),
+            ],
+            &[],
+        );
+
+        device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::COMPUTE, pipeline);
+
+        device.cmd_bind_descriptor_sets(
+            command_buffer,
+            vk::PipelineBindPoint::COMPUTE,
+            pipeline_layout,
+            0,
+            &[descriptor_set],
+            &[],
+        );
+
+        device.cmd_push_constants(
+            command_buffer,
+            pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            bytemuck::bytes_of(&(rectangles.len() as u32)),
+        );
+
+        device.cmd_dispatch(command_buffer, width.div_ceil(8), height.div_ceil(8), 1);
+
+        device.end_command_buffer(command_buffer).unwrap();
+
+        let start = Instant::now();
+        device
+            .queue_submit(
+                queue,
+                &[vk::SubmitInfo::default().command_buffers(&[command_buffer])],
+                fence,
+            )
+            .unwrap();
+
+        device.wait_for_fences(&[fence], true, !0).unwrap();
+
+        let duration = start.elapsed();
+        println!("Duration: {:?}", duration);
+    }
 
     let command_buffer = device
         .allocate_command_buffers(&command_buffer_allocate_info)
@@ -450,10 +760,6 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         )
         .unwrap();
 
-    let fence = device
-        .create_fence(&vk::FenceCreateInfo::default(), None)
-        .unwrap();
-
     device.cmd_pipeline_barrier(
         command_buffer,
         vk::PipelineStageFlags::ALL_COMMANDS,
@@ -462,128 +768,6 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         &[],
         &[],
         &[vk::ImageMemoryBarrier::default()
-            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .layer_count(1)
-                    .level_count(1),
-            )
-            .image(image)],
-    );
-
-    device.cmd_clear_color_image(
-        command_buffer,
-        image,
-        vk::ImageLayout::GENERAL,
-        &vk::ClearColorValue {
-            uint32: [0, 0, 0, 0],
-        },
-        &[vk::ImageSubresourceRange::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .layer_count(1)
-            .level_count(1)],
-    );
-
-    device.cmd_pipeline_barrier(
-        command_buffer,
-        vk::PipelineStageFlags::ALL_COMMANDS,
-        vk::PipelineStageFlags::ALL_COMMANDS,
-        vk::DependencyFlags::empty(),
-        &[],
-        &[],
-        &[vk::ImageMemoryBarrier::default()
-            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
-            .old_layout(vk::ImageLayout::GENERAL)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .layer_count(1)
-                    .level_count(1),
-            )
-            .image(image)],
-    );
-
-    // device.cmd_bind_pipeline(
-    //     command_buffer,
-    //     vk::PipelineBindPoint::COMPUTE,
-    //     raster_pipeline,
-    // );
-
-    // device.cmd_bind_descriptor_sets(
-    //     command_buffer,
-    //     vk::PipelineBindPoint::COMPUTE,
-    //     pipeline_layout,
-    //     0,
-    //     &[descriptor_set],
-    //     &[],
-    // );
-
-    // device.cmd_push_constants(
-    //     command_buffer,
-    //     pipeline_layout,
-    //     vk::ShaderStageFlags::COMPUTE,
-    //     0,
-    //     bytemuck::bytes_of(&(rectangles.len() as u32)),
-    // );
-
-    // device.cmd_dispatch(command_buffer, rectangles.len() as u32, 1, 1);
-
-    device.cmd_pipeline_barrier(
-        command_buffer,
-        vk::PipelineStageFlags::ALL_COMMANDS,
-        vk::PipelineStageFlags::ALL_COMMANDS,
-        vk::DependencyFlags::empty(),
-        &[],
-        &[],
-        &[vk::ImageMemoryBarrier::default()
-            .src_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
-            .old_layout(vk::ImageLayout::GENERAL)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .layer_count(1)
-                    .level_count(1),
-            )
-            .image(image)],
-    );
-
-    device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::COMPUTE, pipeline);
-
-    device.cmd_bind_descriptor_sets(
-        command_buffer,
-        vk::PipelineBindPoint::COMPUTE,
-        pipeline_layout,
-        0,
-        &[descriptor_set],
-        &[],
-    );
-
-    device.cmd_push_constants(
-        command_buffer,
-        pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE,
-        0,
-        bytemuck::bytes_of(&(rectangles.len() as u32)),
-    );
-
-    device.cmd_dispatch(command_buffer, width.div_ceil(8), height.div_ceil(8), 1);
-
-    device.cmd_pipeline_barrier(
-        command_buffer,
-        vk::PipelineStageFlags::ALL_COMMANDS,
-        vk::PipelineStageFlags::ALL_COMMANDS,
-        vk::DependencyFlags::empty(),
-        &[],
-        &[],
-        &[vk::ImageMemoryBarrier::default()
-            .src_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
             .old_layout(vk::ImageLayout::GENERAL)
             .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
@@ -616,7 +800,10 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
 
     device.end_command_buffer(command_buffer).unwrap();
 
-    let start = Instant::now();
+    let fence = device
+        .create_fence(&vk::FenceCreateInfo::default(), None)
+        .unwrap();
+
     device
         .queue_submit(
             queue,
@@ -626,9 +813,6 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         .unwrap();
 
     device.wait_for_fences(&[fence], true, !0).unwrap();
-
-    let duration = start.elapsed();
-    println!("Duration: {:?}", duration);
 
     let mut image_buffer = vec![0u8; (width * height * 4) as usize];
 

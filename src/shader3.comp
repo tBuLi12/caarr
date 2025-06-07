@@ -1,0 +1,66 @@
+#version 450
+
+#extension GL_KHR_shader_subgroup_arithmetic: enable
+#extension GL_KHR_shader_subgroup_vote: enable
+
+layout (local_size_x = 4, local_size_y = 8) in;
+
+struct Rect {
+    vec2 pos;
+    vec2 size;
+    vec4 bg_color;
+    uint parent_idx;
+    uint children_start;
+    uint children_end;
+};
+
+layout(set = 0, binding = 0) readonly buffer Rects {
+    Rect data[];
+} rects;
+
+layout (set = 0, binding = 1, rgba8) uniform image2D image;
+
+layout(set = 0, binding = 2) readonly buffer VerticalRaster {
+    uint data[];
+} vertical;
+
+layout(set = 0, binding = 3) readonly buffer HorizontalRaster {
+    uint data[];
+} horizontal;
+
+void main() {
+    uvec2 sg_size = uvec2(gl_SubgroupSize / 8, 8);
+    uvec2 sg_pos = uvec2(gl_SubgroupInvocationID % sg_size.x, gl_SubgroupInvocationID / sg_size.x);
+    
+    // uint rects_count = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+
+    
+    uint rects_count = 10000;
+    uvec2 px = gl_GlobalInvocationID.xy;
+    uvec2 chunk = px / sg_size;
+    // uvec2 px_start = px - sg_pos;
+    // uvec2 px_end = px_start + sg_size;
+    // uvec2 offset = uvec2(0);
+    // // uvec2 pos_in_rect = uvec2(0);
+    // uint rect_idx = 0;
+    // uint current_idx = 0;
+    // uint end_idx = 1;
+    // bool shared_search = true;
+
+    vec3 color = vec3(0.0);
+
+    for (uint i = 0; i < 9906; i += 32 * gl_SubgroupSize) {
+        uint maskSelf = horizontal.data[chunk.x * rects_count + i / 32 + gl_SubgroupInvocationID] & vertical.data[chunk.y * rects_count + i / 32 + gl_SubgroupInvocationID];
+        uint mask = subgroupOr(maskSelf);
+        if (mask != 0) {
+            for (uint j = 0; j < 32 * gl_SubgroupSize; j++) {
+                if ((mask & (1 << j)) != 0) {
+                    Rect rect = rects.data[i + j];
+                    color = rect.bg_color.rgb;
+                }
+            }
+        }
+    }
+
+    imageStore(image, ivec2(gl_GlobalInvocationID.xy), vec4(color, 1.0));
+}

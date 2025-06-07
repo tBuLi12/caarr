@@ -57,7 +57,8 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         size: [width as f32, height as f32],
     }];
     push_rectangles(&mut gpu_rects, rectangles, [0.0, 0.0]);
-    let rectangles = gpu_rects;
+    let mut rectangles = gpu_rects;
+    println!("{:?}", rectangles.len());
 
     let entry = ash::Entry::load().unwrap();
 
@@ -79,7 +80,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
 
     physical_devices.sort_by_key(|&device| {
         match instance.get_physical_device_properties(device).device_type {
-            vk::PhysicalDeviceType::DISCRETE_GPU => 0,
+            vk::PhysicalDeviceType::DISCRETE_GPU => 6,
             vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
             vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
             vk::PhysicalDeviceType::CPU => 3,
@@ -92,6 +93,16 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         .get(0)
         .copied()
         .expect("No physical devices found");
+
+    eprintln!(
+        "physical device name: {}",
+        instance
+            .get_physical_device_properties(physical_device)
+            .device_name_as_c_str()
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
 
     let queue_family_idx = instance
         .get_physical_device_queue_family_properties(physical_device)
@@ -245,11 +256,17 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         let memory = device.allocate_memory(&allocate_info, None).unwrap();
         device.bind_buffer_memory(buffer, memory, 0).unwrap();
 
+        let copy_start = Instant::now();
+        // for rect in &mut rectangles {
+        //     rect.pos = [4.0, 7.0];
+        // }
+
         let ptr = device
             .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
             .unwrap();
         ptr::copy_nonoverlapping(rectangles.as_ptr() as *mut _, ptr, size as usize);
         device.unmap_memory(memory);
+        eprintln!("copy: {:?}", copy_start.elapsed());
 
         buffer
     };
@@ -274,7 +291,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
                 find_memorytype_index(
                     &requirements,
                     &memory_properties,
-                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
                 )
                 .unwrap(),
             );
@@ -515,7 +532,6 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
             .render_area(scissors[0])
             .layer_count(1)
             .color_attachments(&[vk::RenderingAttachmentInfo::default()
-                .clear_value(clear_value)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .image_view(view)
                 .load_op(vk::AttachmentLoadOp::CLEAR)
@@ -538,6 +554,34 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
 
     device.cmd_end_rendering(command_buffer);
 
+    device.end_command_buffer(command_buffer).unwrap();
+
+    let start = Instant::now();
+    device
+        .queue_submit(
+            queue,
+            &[vk::SubmitInfo::default().command_buffers(&[command_buffer])],
+            fence,
+        )
+        .unwrap();
+
+    device.wait_for_fences(&[fence], true, !0).unwrap();
+
+    let duration = start.elapsed();
+    println!("Duration: {:?}", duration);
+
+    let command_buffer = device
+        .allocate_command_buffers(&command_buffer_allocate_info)
+        .unwrap()[0];
+
+    device
+        .begin_command_buffer(
+            command_buffer,
+            &vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+        )
+        .unwrap();
+
     device.cmd_pipeline_barrier(
         command_buffer,
         vk::PipelineStageFlags::ALL_COMMANDS,
@@ -546,7 +590,6 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         &[],
         &[],
         &[vk::ImageMemoryBarrier::default()
-            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
             .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
             .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
             .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
@@ -579,7 +622,8 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
 
     device.end_command_buffer(command_buffer).unwrap();
 
-    let start = Instant::now();
+    device.reset_fences(&[fence]).unwrap();
+
     device
         .queue_submit(
             queue,
@@ -589,9 +633,6 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         .unwrap();
 
     device.wait_for_fences(&[fence], true, !0).unwrap();
-
-    let duration = start.elapsed();
-    println!("Duration: {:?}", duration);
 
     let mut image_buffer = vec![0u8; (width * height * 4) as usize];
 
