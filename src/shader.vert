@@ -1,7 +1,7 @@
 #version 450
 
-layout(location = 0) in vec2 pos;
-layout(location = 1) in vec2 size;
+layout(location = 0) in uvec2 pos;
+layout(location = 1) in uvec2 size;
 layout(location = 2) in vec4 bg_color;
 
 layout(location = 0) out RectData {

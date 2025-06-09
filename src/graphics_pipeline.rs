@@ -16,8 +16,8 @@ use super::Rect;
 #[derive(Debug, Clone)]
 #[repr(C)]
 struct GpuRect {
-    pos: [f32; 2],
-    size: [f32; 2],
+    pos: [u32; 2],
+    size: [u32; 2],
     bg_color: BgColor,
 }
 
@@ -37,7 +37,7 @@ pub fn find_memorytype_index(
 }
 
 pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
-    fn push_rectangles(gpu_rects: &mut Vec<GpuRect>, rects: &[Rect], offset: [f32; 2]) {
+    fn push_rectangles(gpu_rects: &mut Vec<GpuRect>, rects: &[Rect], offset: [u32; 2]) {
         for rect in rects {
             let pos = [rect.pos[0] + offset[0], rect.pos[1] + offset[1]];
 
@@ -53,10 +53,10 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
 
     let mut gpu_rects = vec![GpuRect {
         bg_color: BgColor([1.0, 1.0, 1.0, 1.0]),
-        pos: [0.0, 0.0],
-        size: [width as f32, height as f32],
+        pos: [0, 0],
+        size: [width, height],
     }];
-    push_rectangles(&mut gpu_rects, rectangles, [0.0, 0.0]);
+    push_rectangles(&mut gpu_rects, rectangles, [0, 0]);
     let mut rectangles = gpu_rects;
     println!("{:?}", rectangles.len());
 
