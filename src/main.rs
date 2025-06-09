@@ -29,7 +29,7 @@ fn main() {
 
     let width = 7680;
     let height = 4320 / 2;
-    // let width = 1920 / 2;
+    // let width = 1920;
     // let height = 1080;
 
     let get_page = |x: u32, width: u32| {
@@ -42,19 +42,19 @@ fn main() {
 
         for (i, &len) in line_lens.iter().enumerate() {
             let mut line = Rect {
-                bg_color: BgColor([0.0, 0.0, 0.0, 0.0]),
+                bg_color: BgColor([0.0, 1.0, 0.0, 0.0]),
                 pos: [0, i as u32 * 35],
                 size: [len as u32 * 16, 22],
                 children: vec![],
             };
-            // for i in 0..len {
-            //     line.children.push(Rect {
-            //         bg_color: BgColor([0.0, 0.0, 1.0, 0.7]),
-            //         pos: [i as u32 * 16, 0],
-            //         size: [15, 22],
-            //         children: vec![],
-            //     });
-            // }
+            for i in 0..len {
+                line.children.push(Rect {
+                    bg_color: BgColor([0.0, 0.0, 1.0, 0.7]),
+                    pos: [i as u32 * 16, 0],
+                    size: [15, 22],
+                    children: vec![],
+                });
+            }
             container.children.push(line);
         }
 

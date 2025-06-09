@@ -29,22 +29,25 @@ layout(set = 0, binding = 3) writeonly buffer HorizontalRaster {
 } horizontal;
 
 void main() {
+    const uint chunk_size = 8;
+
     // uvec2 sg_size = uvec2(gl_SubgroupSize / 8, 8);
     
     // uint rects_count = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
     uint rects_count = 10000;
+
     uint rect_idx = gl_GlobalInvocationID.x;
     Rect rect = rects.data[rect_idx];
-    uvec2 pos = uvec2(rect.pos);
-    uvec2 size = uvec2(rect.size);
-
+    uvec2 pos = rect.pos / chunk_size;
+    uvec2 size = (rect.size + (chunk_size - rect.size % chunk_size)) / chunk_size;
+    // uvec2 size = rect.size / chunk_size;
     uvec2 pos_end = pos + size;
     
-    for (uint i = pos.x; i < pos_end.x; i++) {
+    for (uint i = pos.x; i <= pos_end.x; i++) {
         atomicOr(horizontal.data[(i * rects_count) + (rect_idx / 32)], 1 << (rect_idx % 32));
     }
 
-    for (uint i = pos.y; i < pos_end.y; i++) {
+    for (uint i = pos.y; i <= pos_end.y; i++) {
         atomicOr(vertical.data[(i * rects_count) + (rect_idx / 32)], 1 << (rect_idx % 32));
     }
 }

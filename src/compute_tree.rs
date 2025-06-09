@@ -1,4 +1,4 @@
-use std::{ffi, mem, ops::Range, ptr, time::Instant};
+use std::{ffi, hint, mem, ops::Range, ptr, time::Instant};
 
 use ash::vk;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -11,6 +11,7 @@ struct GpuRect {
     pos: [u32; 2],
     size: [u32; 2],
     bg_color: BgColor,
+    // bg_color: u32,
     parent_idx: u32,
     children: [u32; 2],
 }
@@ -41,6 +42,10 @@ fn rects_to_gpu(rects: Vec<Rect>) -> Vec<GpuRect> {
 
         for rect in rects {
             gpu_rects.push(GpuRect {
+                // bg_color: (((rect.bg_color.0[3] * 255.0) as u32) << 24)
+                //     | (((rect.bg_color.0[2] * 255.0) as u32) << 16)
+                //     | (((rect.bg_color.0[1] * 255.0) as u32) << 8)
+                //     | (((rect.bg_color.0[0] * 255.0) as u32) << 0),
                 bg_color: rect.bg_color,
                 pos: [rect.pos[0] + parent_pos[0], rect.pos[1] + parent_pos[1]],
                 size: rect.size,
@@ -77,35 +82,131 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
     // println!("{:?}", rectangles[7931]);
     // return;
     // {
-    //     let mut current_idx: usize = 0;
-    //     let mut end_idx: usize = 1;
-    //     let mut rect_idx: usize = 0;
+    //     let mut image_buffer = vec![0u32; (width * height) as usize];
 
-    //     while (current_idx < end_idx) {
-    //         let mut rect = rectangles[current_idx];
-    //         // if (all(greaterThanEqual(px, pos)) && all(lessThan(px, pos + rect.size))) {
-    //         // pos_in_rect = px - pos;
-    //         rect_idx = current_idx + 1;
-    //         current_idx = rect.children[0] as usize;
-    //         end_idx = rect.children[1] as usize;
-    //         // } else {
-    //         //     current_idx += 1;
-    //         // }
+    //     // let mut histogram = vec![];
 
-    //         while (current_idx >= end_idx && rect_idx != 0) {
-    //             current_idx = rect_idx;
-    //             // eprintln!("    current_idx: {}", current_idx);
-    //             let parent = rectangles[current_idx - 1];
-    //             rect_idx = parent.parent_idx as usize;
-    //             if (parent.parent_idx == 0) {
-    //                 end_idx = 1;
-    //             } else {
-    //                 end_idx = rectangles[parent.parent_idx as usize - 1].children[1] as usize;
-    //             }
+    //     let rects_count = rectangles.len();
+    //     let slot_count = rects_count.div_ceil(32);
+
+    //     let width_in_chunks = width.div_ceil(chunk_size);
+    //     let height_in_chunks = height.div_ceil(chunk_size);
+
+    //     let mut horizontal = vec![0u32; (width_in_chunks as usize * slot_count)];
+    //     let mut vertical = vec![0u32; (height_in_chunks as usize * slot_count)];
+
+    //     const chunk_size: u32 = 8;
+
+    //     let start = Instant::now();
+
+    //     for (i, rect) in rectangles.iter().enumerate() {
+    //         let pos = [
+    //             (rect.pos[0] / chunk_size) as usize,
+    //             (rect.pos[1] / chunk_size) as usize,
+    //         ];
+    //         // let size = (rect.size + (chunk_size - rect.size % chunk_size)) / chunk_size;
+    //         let size = [
+    //             (rect.size[0].div_ceil(chunk_size)) as usize,
+    //             (rect.size[1].div_ceil(chunk_size)) as usize,
+    //         ];
+    //         let pos_end = [pos[0] + size[0], pos[1] + size[1]];
+
+    //         for x in pos[0]..pos_end[0].min(width_in_chunks as usize) {
+    //             horizontal[(x * slot_count as usize) + (i / 32)] |= 1 << (i % 32);
+    //         }
+
+    //         for y in pos[1]..pos_end[1].min(height_in_chunks as usize) {
+    //             vertical[(y * slot_count as usize) + (i / 32)] |= 1 << (i % 32);
     //         }
     //     }
-    // }
 
+    //     for chunk_y in 0..(height.div_ceil(chunk_size) as usize) {
+    //         for chunk_x in 0..(width.div_ceil(chunk_size) as usize) {
+    //             let mut current_idx: usize = 0;
+    //             let mut end_idx: usize = 1;
+    //             let mut rect_idx: usize = 0;
+
+    //             let mut visited = 0;
+    //             let mut px = [[0, 0]; (chunk_size * chunk_size) as usize];
+
+    //             for i in 0..chunk_size {
+    //                 for j in 0..chunk_size {
+    //                     px[(i * chunk_size + j) as usize] = [
+    //                         chunk_x as u32 * chunk_size + j,
+    //                         chunk_y as u32 * chunk_size + i,
+    //                     ];
+    //                 }
+    //             }
+
+    //             let mut colors = [0u32; (chunk_size * chunk_size) as usize];
+
+    //             while (current_idx < end_idx) {
+    //                 visited += 1;
+
+    //                 let rect = rectangles[current_idx];
+    //                 let pos = rect.pos;
+    //                 let pos_end = [pos[0] + rect.size[0], pos[1] + rect.size[1]];
+
+    //                 let shift = current_idx % 32;
+    //                 let mask = (horizontal[chunk_x * slot_count + current_idx / 32]
+    //                     & vertical[chunk_y * slot_count + current_idx / 32])
+    //                     >> shift;
+    //                 if ((mask & 1) != 0) {
+    //                     for i in 0..(chunk_size * chunk_size) {
+    //                         let [x, y] = px[i as usize];
+    //                         if (x >= pos[0] && y >= pos[1] && x < pos_end[0] && y < pos_end[1]) {
+    //                             colors[i as usize] = rect.bg_color;
+    //                         }
+    //                     }
+
+    //                     rect_idx = current_idx + 1;
+    //                     current_idx = rect.children[0] as usize;
+    //                     end_idx = rect.children[1] as usize;
+    //                 } else {
+    //                     if (mask == 0) {
+    //                         current_idx += 32 - shift;
+    //                     } else {
+    //                         current_idx += mask.trailing_zeros() as usize;
+    //                     }
+    //                 }
+
+    //                 while (current_idx >= end_idx && rect_idx != 0) {
+    //                     current_idx = rect_idx;
+    //                     let parent = rectangles[current_idx - 1];
+    //                     rect_idx = parent.parent_idx as usize;
+    //                     if (parent.parent_idx == 0) {
+    //                         end_idx = 1;
+    //                     } else {
+    //                         end_idx =
+    //                             rectangles[parent.parent_idx as usize - 1].children[1] as usize;
+    //                     }
+    //                 }
+    //             }
+
+    //             hint::black_box(colors);
+    //             // for ([x, y], color) in px.iter().zip(colors) {
+    //             //     image_buffer[(y * width + x) as usize] = color;
+    //             // }
+    //             // if histogram.len() <= visited {
+    //             //     histogram.resize(visited + 1, 0);
+    //             // }
+
+    //             // histogram[visited] += 1;
+    //         }
+    //     }
+
+    //     println!("Duration: {:?}", start.elapsed());
+    //     // println!("{:?}", histogram);
+
+    //     image::save_buffer(
+    //         "image.png",
+    //         bytemuck::cast_slice(&image_buffer),
+    //         width,
+    //         height,
+    //         image::ColorType::Rgba8,
+    //     )
+    //     .unwrap();
+    // }
     let entry = ash::Entry::load().unwrap();
 
     let instance = {
@@ -126,7 +227,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
 
     physical_devices.sort_by_key(|&device| {
         match instance.get_physical_device_properties(device).device_type {
-            vk::PhysicalDeviceType::DISCRETE_GPU => 6,
+            vk::PhysicalDeviceType::DISCRETE_GPU => 0,
             vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
             vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
             vk::PhysicalDeviceType::CPU => 3,
@@ -663,30 +764,30 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
             .image(image)],
     );
 
-    // device.cmd_bind_pipeline(
-    //     command_buffer,
-    //     vk::PipelineBindPoint::COMPUTE,
-    //     raster_pipeline,
-    // );
+    device.cmd_bind_pipeline(
+        command_buffer,
+        vk::PipelineBindPoint::COMPUTE,
+        raster_pipeline,
+    );
 
-    // device.cmd_bind_descriptor_sets(
-    //     command_buffer,
-    //     vk::PipelineBindPoint::COMPUTE,
-    //     pipeline_layout,
-    //     0,
-    //     &[descriptor_set],
-    //     &[],
-    // );
+    device.cmd_bind_descriptor_sets(
+        command_buffer,
+        vk::PipelineBindPoint::COMPUTE,
+        pipeline_layout,
+        0,
+        &[descriptor_set],
+        &[],
+    );
 
-    // device.cmd_push_constants(
-    //     command_buffer,
-    //     pipeline_layout,
-    //     vk::ShaderStageFlags::COMPUTE,
-    //     0,
-    //     bytemuck::bytes_of(&(rectangles.len() as u32)),
-    // );
+    device.cmd_push_constants(
+        command_buffer,
+        pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytemuck::bytes_of(&(rectangles.len() as u32)),
+    );
 
-    // device.cmd_dispatch(command_buffer, rectangles.len().div_ceil(64) as u32, 1, 1);
+    device.cmd_dispatch(command_buffer, rectangles.len().div_ceil(64) as u32, 1, 1);
 
     device.cmd_pipeline_barrier(
         command_buffer,
@@ -696,13 +797,13 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         &[],
         &[
             vk::BufferMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_READ)
-                .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
                 .buffer(verical_raster_buffer)
                 .size(vk::WHOLE_SIZE),
             vk::BufferMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_READ)
-                .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
                 .buffer(horizontal_raster_buffer)
                 .size(vk::WHOLE_SIZE),
         ],
@@ -728,7 +829,12 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         bytemuck::bytes_of(&(rectangles.len() as u32)),
     );
 
-    device.cmd_dispatch(command_buffer, width.div_ceil(16), height.div_ceil(16), 1);
+    device.cmd_dispatch(
+        command_buffer,
+        width.div_ceil(8 * 8),
+        height.div_ceil(8 * 8),
+        1,
+    );
 
     device.end_command_buffer(command_buffer).unwrap();
 

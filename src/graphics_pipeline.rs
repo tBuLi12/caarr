@@ -80,7 +80,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
 
     physical_devices.sort_by_key(|&device| {
         match instance.get_physical_device_properties(device).device_type {
-            vk::PhysicalDeviceType::DISCRETE_GPU => 6,
+            vk::PhysicalDeviceType::DISCRETE_GPU => 0,
             vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
             vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
             vk::PhysicalDeviceType::CPU => 3,
@@ -395,13 +395,13 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         vk::VertexInputAttributeDescription {
             location: 0,
             binding: 0,
-            format: vk::Format::R32G32_SFLOAT,
+            format: vk::Format::R32G32_UINT,
             offset: offset_of!(GpuRect, pos) as u32,
         },
         vk::VertexInputAttributeDescription {
             location: 1,
             binding: 0,
-            format: vk::Format::R32G32_SFLOAT,
+            format: vk::Format::R32G32_UINT,
             offset: offset_of!(GpuRect, size) as u32,
         },
         vk::VertexInputAttributeDescription {

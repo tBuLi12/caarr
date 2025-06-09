@@ -20,126 +20,108 @@ layout(set = 0, binding = 0) readonly buffer Rects {
 
 layout (set = 0, binding = 1, rgba8) uniform image2D image;
 
+layout(set = 0, binding = 2) readonly buffer VerticalRaster {
+    uint data[];
+} vertical;
+
+layout(set = 0, binding = 3) readonly buffer HorizontalRaster {
+    uint data[];
+} horizontal;
+
+const uint chunk_size = 8;
+
+
 void main() {
-    const uint chunk_size = 2;
+        vec3 colors[chunk_size][chunk_size];
+    // if (gl_LocalInvocationID.x == 0 && gl_LocalInvocationID.y == 0) {
+        uint rects_count = 10000;
 
-    uvec2 px_start = gl_GlobalInvocationID.xy * chunk_size;
-    uvec2 px_end = px_start + chunk_size;
-    
-    uvec2 px[chunk_size * chunk_size];
-
-    for (uint i = 0; i < chunk_size; i++) {
-        for (uint j = 0; j < chunk_size; j++) {
-            px[i * chunk_size + j] = px_start + uvec2(i, j);
-        }
-    }
-
-    uvec2 offset = uvec2(0);
-    uint rect_idx = 0;
-    uint current_idx = 0;
-    uint end_idx = 1;
-    bool shared_search = true;
-
-    // while (current_idx < end_idx) {
-    //     Rect rect = rects.data[min(current_idx + gl_SubgroupInvocationID, end_idx - 1)];
-    //     uvec2 pos = offset + uvec2(rect.pos);
-    //     uvec2 pos_end = pos + uvec2(rect.size);
-    //     bool inside = all(greaterThanEqual(px_start, pos)) && all(lessThanEqual(px_end, pos + rect.size));
-    //     uint first_inside = subgroupMin(inside ? gl_SubgroupInvocationID : 0xFFFFFFFF);
-    //     if (first_inside != 0xFFFFFFFF) {
-    //         current_idx += first_inside;
-    //         Rect rect = rects.data[current_idx];
-    //         uvec2 pos = offset + uvec2(rect.pos);
-    //         offset = pos;
-    //         rect_idx = current_idx + 1;
-    //         current_idx = rect.children_start;
-    //         end_idx = rect.children_end;
-    //     } else {
-    //         bool intersects = !(px_end.x < pos.x || px_start.x > pos_end.x || px_end.y < pos.y || px_start.y > pos_end.y);
-    //         uint first_intersecting = subgroupMin(intersects ? gl_SubgroupInvocationID : 0xFFFFFFFF);
-    //         current_idx += min(first_intersecting, gl_SubgroupSize);
-    //         if (first_intersecting != 0xFFFFFFFF) {
-    //             break;
-    //         }
-    //     }
-    // }
-
-    vec3 colors[chunk_size * chunk_size];
-    // vec3 alphas = vec3(0.0);
-
-    // for (uint i = 0; i < chunk_size * chunk_size; i++) {
-    //     colors[i] = vec3(1.0, 0.0, 1.0);
-    // }
-
-    while (current_idx < end_idx) {
-        Rect rect = rects.data[current_idx];
-
-        uvec2 pos = rect.pos;
-        uvec2 pos_end = pos + rect.size;
+        uvec2 px_start = gl_GlobalInvocationID.xy * chunk_size;
+        uvec2 px_end = px_start + chunk_size;
         
-        bool any_intersects = true;
+        uvec2 offset = uvec2(0);
+        uint rect_idx = 0;
+        uint current_idx = 0;
+        uint end_idx = 1;
 
-        // for (uint i = 0; i < chunk_size * chunk_size; i++) {
-        //     if (all(greaterThanEqual(px[i], pos)) && all(lessThan(px[i], pos_end))) {
-        //         any_intersects = true;
+        // while (current_idx < end_idx) {
+        //     Rect rect = rects.data[min(current_idx + gl_SubgroupInvocationID, end_idx - 1)];
+        //     uvec2 pos = offset + uvec2(rect.pos);
+        //     uvec2 pos_end = pos + uvec2(rect.size);
+        //     bool inside = all(greaterThanEqual(px_start, pos)) && all(lessThanEqual(px_end, pos + rect.size));
+        //     uint first_inside = subgroupMin(inside ? gl_SubgroupInvocationID : 0xFFFFFFFF);
+        //     if (first_inside != 0xFFFFFFFF) {
+        //         current_idx += first_inside;
+        //         Rect rect = rects.data[current_idx];
+        //         uvec2 pos = offset + uvec2(rect.pos);
+        //         offset = pos;
+        //         rect_idx = current_idx + 1;
+        //         current_idx = rect.children_start;
+        //         end_idx = rect.children_end;
+        //     } else {
+        //         bool intersects = !(px_end.x < pos.x || px_start.x > pos_end.x || px_end.y < pos.y || px_start.y > pos_end.y);
+        //         uint first_intersecting = subgroupMin(intersects ? gl_SubgroupInvocationID : 0xFFFFFFFF);
+        //         current_idx += min(first_intersecting, gl_SubgroupSize);
+        //         if (first_intersecting != 0xFFFFFFFF) {
+        //             break;
+        //         }
         //     }
         // }
 
-        // if (all(greaterThan(px_end, pos)) && all(lessThan(px_start, pos_end))) {
-        if (any_intersects) {
-            for (uint i = 0; i < chunk_size * chunk_size; i++) {
-                if (all(greaterThanEqual(px[i], pos)) && all(lessThan(px[i], pos_end))) {
-                    colors[i] = rect.bg_color.rgb;
+        // vec3 alphas = vec3(0.0);
+
+        for (uint i = 0; i < chunk_size; i++) {
+            for (uint j = 0; j < chunk_size; j++) {
+                colors[i][j] = vec3(1.0, 0.0, 1.0);
+            }
+        }
+
+        uint visited = 0;
+
+        while (current_idx < end_idx) {
+            Rect rect = rects.data[current_idx];
+            uvec2 pos = rect.pos;
+            uvec2 pos_end = pos + rect.size;
+
+            uint shift = current_idx % 32;
+            uint mask = (horizontal.data[gl_GlobalInvocationID.x * rects_count + current_idx / 32] & vertical.data[gl_GlobalInvocationID.y * rects_count + current_idx / 32]) >> shift;
+            if ((mask & 1) != 0) {
+                            visited += 1;
+                // for (uint i = 0; i < chunk_size; i++) {
+                //     for (uint j = 0; j < chunk_size; j++) {
+                //         uvec2 px = px_start + uvec2(i, j);
+                //         if (all(greaterThanEqual(px, pos)) && all(lessThan(px, pos_end))) {
+                //             colors[i][j] = rect.bg_color.rgb;
+                //         }
+                //     }
+                // }
+
+                rect_idx = current_idx + 1;
+                current_idx = rect.children_start;
+                end_idx = rect.children_end;
+            } else {
+                if (mask == 0) {
+                    current_idx += 32 - shift;
+                } else {
+                    current_idx += findLSB(mask);
                 }
             }
 
-            // if (all(greaterThanEqual(px_2, rect.pos)) && all(lessThan(px_2, rect.pos + rect.size))) {
-            //     color_2 = rect.bg_color.rgb;
-            // }
-            // if (all(greaterThanEqual(px_3, rect.pos)) && all(lessThan(px_3, rect.pos + rect.size))) {
-            //     color_3 = rect.bg_color.rgb;
-            // }
-            // if (all(greaterThanEqual(px_4, rect.pos)) && all(lessThan(px_4, rect.pos + rect.size))) {
-            //     color_4 = rect.bg_color.rgb;
-            // }
-            // pos_in_rect = px - pos;
-            rect_idx = current_idx + 1;
-            current_idx = rect.children_start;
-            end_idx = rect.children_end;
-            // color = rect.bg_color.rgb;
-        } else {
-            current_idx += 1;
-        }
-
-        while (current_idx >= end_idx && rect_idx != 0) {
-            current_idx = rect_idx;
-            Rect parent = rects.data[current_idx - 1];
-            rect_idx = parent.parent_idx;
-            if (parent.parent_idx == 0) {
-                end_idx = 1;
-            } else {
-                end_idx = rects.data[parent.parent_idx - 1].children_end;
+            while (current_idx >= end_idx && rect_idx != 0) {
+                current_idx = rect_idx;
+                Rect parent = rects.data[current_idx - 1];
+                rect_idx = parent.parent_idx;
+                if (parent.parent_idx == 0) {
+                    end_idx = 1;
+                } else {
+                    end_idx = rects.data[parent.parent_idx - 1].children_end;
+                }
             }
         }
-    }
-
-    // while (current_idx < end_idx) {
-    //     Rect rect = rects.data[current_idx];
-    //     uvec2 pos = offset + uvec2(rect.pos);
-    //     current_idx += 1;
-        
-    //     if (all(greaterThanEqual(px, pos)) && all(lessThan(px, pos + rect.size))) {
-    //         // offset = pos;
-    //         rect_idx = current_idx;
-    //         current_idx = rect.children_start;
-    //         end_idx = rect.children_end;
-    //     }
     // }
 
-    // if (rect_idx != 0) { 
-    //     Rect rect = rects.data[rect_idx - 1];
-    //     color = rect.bg_color.rgb;
-    // }
+    // barrier();
+
     // while (all(lessThan(alphas, vec3(1.0))) && rect_idx != 0) { 
     //     Rect rect = rects.data[rect_idx - 1];
     //     vec3 rect_color;
@@ -151,10 +133,16 @@ void main() {
     //     alphas += a;
     //     rect_idx = rect.parent_idx;
     // }
-    
-    for (uint i = 0; i < chunk_size * chunk_size; i++) {
-        imageStore(image, ivec2(px[i]), vec4(colors[i], 1.0));
-    }
+
+    imageStore(image, ivec2(px_start), vec4(vec3(float(visited) / 500), 1.0));
+    // for (uint i = 0; i < chunk_size; i++) {
+    //     for (uint j = 0; j < chunk_size; j++) {
+    //         imageStore(image, ivec2(px_start + uvec2(i, j)), vec4(colors[i][j], 1.0));
+    //     }
+    // }
+
+    // imageStore(image, ivec2(gl_GlobalInvocationID.xy), vec4(colors[gl_LocalInvocationID.x][gl_LocalInvocationID.y], 1.0));
+    // imageStore(image, ivec2(gl_GlobalInvocationID.xy), vec4(vec3(1.0, 0.0, 1.0), 1.0));
     // imageStore(image, ivec2(px_2), vec4(color_2, 1.0));
     // imageStore(image, ivec2(px_3), vec4(color_3, 1.0));
     // imageStore(image, ivec2(px_4), vec4(color_4, 1.0));
