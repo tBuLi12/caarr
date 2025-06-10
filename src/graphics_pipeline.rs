@@ -19,6 +19,7 @@ struct GpuRect {
     pos: [u32; 2],
     size: [u32; 2],
     bg_color: BgColor,
+    parent_idx: u32,
 }
 
 pub fn find_memorytype_index(
@@ -37,17 +38,18 @@ pub fn find_memorytype_index(
 }
 
 pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
-    fn push_rectangles(gpu_rects: &mut Vec<GpuRect>, rects: &[Rect], offset: [u32; 2]) {
+    fn push_rectangles(gpu_rects: &mut Vec<GpuRect>, rects: &[Rect], parent_idx: u32) {
         for rect in rects {
-            let pos = [rect.pos[0] + offset[0], rect.pos[1] + offset[1]];
+            let idx = gpu_rects.len() as u32 + 1;
 
             gpu_rects.push(GpuRect {
                 bg_color: rect.bg_color,
-                pos,
+                pos: rect.pos,
                 size: rect.size,
+                parent_idx,
             });
 
-            push_rectangles(gpu_rects, &rect.children, pos);
+            push_rectangles(gpu_rects, &rect.children, idx);
         }
     }
 
@@ -55,8 +57,9 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         bg_color: BgColor([1.0, 1.0, 1.0, 1.0]),
         pos: [0, 0],
         size: [width, height],
+        parent_idx: 0,
     }];
-    push_rectangles(&mut gpu_rects, rectangles, [0, 0]);
+    push_rectangles(&mut gpu_rects, rectangles, 1);
     let mut rectangles = gpu_rects;
     println!("{:?}", rectangles.len());
 
@@ -278,7 +281,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         let buffer = device
             .create_buffer(
                 &vk::BufferCreateInfo::default().size(size).usage(
-                    vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                    vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 ),
                 None,
             )
@@ -358,13 +361,27 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
             .unwrap()
     };
 
+    let bindings = [vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .stage_flags(vk::ShaderStageFlags::VERTEX)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .descriptor_count(1)];
+
+    let set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+
+    let set_layout = device
+        .create_descriptor_set_layout(&set_layout_create_info, None)
+        .unwrap();
+
+    let set_layouts = [set_layout];
+
     let pipeline_layout = device
         .create_pipeline_layout(
-            &vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&[
-                vk::PushConstantRange::default()
+            &vk::PipelineLayoutCreateInfo::default()
+                .push_constant_ranges(&[vk::PushConstantRange::default()
                     .size(mem::size_of::<[f32; 2]>() as u32)
-                    .stage_flags(vk::ShaderStageFlags::VERTEX),
-            ]),
+                    .stage_flags(vk::ShaderStageFlags::VERTEX)])
+                .set_layouts(&set_layouts),
             None,
         )
         .unwrap();
@@ -385,32 +402,9 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         },
     ];
 
-    let vertex_input_binding_descriptions = [vk::VertexInputBindingDescription {
-        binding: 0,
-        stride: mem::size_of::<GpuRect>() as u32,
-        input_rate: vk::VertexInputRate::INSTANCE,
-    }];
+    let vertex_input_binding_descriptions = [];
 
-    let vertex_input_attribute_descriptions = [
-        vk::VertexInputAttributeDescription {
-            location: 0,
-            binding: 0,
-            format: vk::Format::R32G32_UINT,
-            offset: offset_of!(GpuRect, pos) as u32,
-        },
-        vk::VertexInputAttributeDescription {
-            location: 1,
-            binding: 0,
-            format: vk::Format::R32G32_UINT,
-            offset: offset_of!(GpuRect, size) as u32,
-        },
-        vk::VertexInputAttributeDescription {
-            location: 2,
-            binding: 0,
-            format: vk::Format::R32G32B32A32_SFLOAT,
-            offset: offset_of!(GpuRect, bg_color) as u32,
-        },
-    ];
+    let vertex_input_attribute_descriptions = [];
 
     let vertex_input_assembly_state_info = vk::PipelineInputAssemblyStateCreateInfo {
         topology: vk::PrimitiveTopology::TRIANGLE_LIST,
@@ -426,7 +420,10 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         max_depth: 1.0,
     }];
     let scissors = [vk::Rect2D {
-        extent: vk::Extent2D { width, height },
+        extent: vk::Extent2D {
+            width: width.div_ceil(1),
+            height: height.div_ceil(1),
+        },
         offset: vk::Offset2D { x: 0, y: 0 },
     }];
     let viewport_state_info = vk::PipelineViewportStateCreateInfo::default()
@@ -479,6 +476,40 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         .create_graphics_pipelines(vk::PipelineCache::null(), &[graphic_pipeline_info], None)
         .unwrap()[0];
 
+    let pool_sizes = [vk::DescriptorPoolSize {
+        ty: vk::DescriptorType::STORAGE_BUFFER,
+        descriptor_count: 1,
+    }];
+
+    let descriptor_pool = device
+        .create_descriptor_pool(
+            &vk::DescriptorPoolCreateInfo::default()
+                .max_sets(1)
+                .pool_sizes(&pool_sizes),
+            None,
+        )
+        .unwrap();
+
+    let descriptor_set = device
+        .allocate_descriptor_sets(
+            &vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(descriptor_pool)
+                .set_layouts(&set_layouts),
+        )
+        .unwrap()[0];
+
+    device.update_descriptor_sets(
+        &[vk::WriteDescriptorSet::default()
+            .dst_set(descriptor_set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(&[vk::DescriptorBufferInfo::default()
+                .buffer(vertex_buffer)
+                .offset(0)
+                .range(vk::WHOLE_SIZE)])],
+        &[],
+    );
+
     let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
         .command_buffer_count(1)
         .command_pool(command_pool)
@@ -514,7 +545,9 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         &[],
         &[],
         &[vk::ImageMemoryBarrier::default()
-            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+            .dst_access_mask(
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::COLOR_ATTACHMENT_READ,
+            )
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
             .subresource_range(
@@ -534,13 +567,21 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
             .color_attachments(&[vk::RenderingAttachmentInfo::default()
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .image_view(view)
-                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .clear_value(clear_value)
+                .load_op(vk::AttachmentLoadOp::LOAD)
                 .store_op(vk::AttachmentStoreOp::STORE)]),
     );
 
     device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
-    device.cmd_bind_vertex_buffers(command_buffer, 0, &[vertex_buffer], &[0]);
+    device.cmd_bind_descriptor_sets(
+        command_buffer,
+        vk::PipelineBindPoint::GRAPHICS,
+        pipeline_layout,
+        0,
+        &[descriptor_set],
+        &[],
+    );
 
     device.cmd_push_constants(
         command_buffer,

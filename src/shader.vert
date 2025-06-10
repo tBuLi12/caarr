@@ -1,12 +1,19 @@
 #version 450
 
-layout(location = 0) in uvec2 pos;
-layout(location = 1) in uvec2 size;
-layout(location = 2) in vec4 bg_color;
+struct Rect {
+    uvec2 pos;
+    uvec2 size;
+    vec4 bg_color;
+    uint parent_idx;
+};
+
+layout(set = 0, binding = 0) readonly buffer Rects {
+    Rect data[];
+} rects;
 
 layout(location = 0) out RectData {
     vec4 bg_color;
-} rect;
+} out_rect;
 
 layout(push_constant) uniform PushConstants {
     vec2 screen_size;
@@ -22,9 +29,20 @@ vec2 positions[6] = vec2[](
 );
 
 void main() {
-    vec2 in_rect = positions[gl_VertexIndex] * size;
+    uvec2 offset = uvec2(0);
 
-    rect.bg_color = bg_color;
+    Rect rect = rects.data[gl_InstanceIndex];
+
+    uint parent_idx = rect.parent_idx;
+    while (parent_idx != 0) {
+        Rect parent = rects.data[parent_idx - 1];
+        offset += parent.pos;
+        parent_idx = parent.parent_idx;
+    }
+
+    vec2 in_rect = positions[gl_VertexIndex] * rect.size;
+
+    out_rect.bg_color = rect.bg_color;
     
-    gl_Position = vec4((in_rect + pos) * 2.0 / constants.screen_size - vec2(1.0), 0.0, 1.0);
+    gl_Position = vec4((in_rect + rect.pos + offset) * 2.0 / constants.screen_size - vec2(1.0), 0.0, 1.0);
 }

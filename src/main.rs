@@ -1,4 +1,4 @@
-use std::{fs, ops::Range};
+use std::{fs, ops::Range, thread, time::Duration};
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
@@ -42,20 +42,61 @@ fn main() {
 
         for (i, &len) in line_lens.iter().enumerate() {
             let mut line = Rect {
-                bg_color: BgColor([0.0, 1.0, 0.0, 0.0]),
+                bg_color: BgColor([0.0, 1.0, 0.0, 1.0]),
                 pos: [0, i as u32 * 35],
                 size: [len as u32 * 16, 22],
                 children: vec![],
             };
             for i in 0..len {
                 line.children.push(Rect {
-                    bg_color: BgColor([0.0, 0.0, 1.0, 0.7]),
+                    bg_color: BgColor([0.0, 0.0, 1.0, 0.5]),
                     pos: [i as u32 * 16, 0],
                     size: [15, 22],
                     children: vec![],
                 });
             }
             container.children.push(line);
+        }
+
+        let outline_width = width / 6;
+        let outline_height = height / 2;
+
+        let line_lens: Vec<_> = fs::read_to_string("./src/graphics_pipeline.rs")
+            .unwrap()
+            .lines()
+            .take(600)
+            .map(|line| line.len())
+            .collect();
+
+        for i in 0..5 {
+            let mut outline = Rect {
+                pos: [width - outline_width - (i as u32 * (outline_width + 20)), 0],
+                size: [outline_width, outline_height],
+                bg_color: BgColor([0.0, 1.0, 1.0, 1.0]),
+                children: vec![],
+            };
+
+            for (i, &len) in line_lens.iter().enumerate() {
+                let mut line = Rect {
+                    bg_color: BgColor([0.0, 1.0, 0.0, 1.0]),
+                    pos: [0, i as u32 * 2],
+                    size: [len as u32 * 2, 2],
+                    children: vec![],
+                };
+
+                for i in 0..len {
+                    line.children.push(Rect {
+                        bg_color: BgColor([0.0, 0.0, 1.0, 0.5]),
+                        pos: [i as u32 * 2, 0],
+                        size: [2, 2],
+                        children: vec![],
+                    });
+                }
+
+                outline.children.push(line);
+            }
+
+            container.children.push(outline);
         }
 
         container

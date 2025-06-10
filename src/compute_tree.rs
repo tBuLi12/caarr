@@ -1,4 +1,9 @@
-use std::{ffi, hint, mem, ops::Range, ptr, time::Instant};
+use std::{
+    ffi, hint, mem,
+    ops::Range,
+    ptr, thread,
+    time::{Duration, Instant},
+};
 
 use ash::vk;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -212,8 +217,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
     let instance = {
         entry.create_instance(
             &vk::InstanceCreateInfo::default()
-                .application_info(&vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3))
-                .enabled_layer_names(&["VK_LAYER_KHRONOS_validation".as_ptr() as *const i8]),
+                .application_info(&vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3)), // .enabled_layer_names(&["VK_LAYER_KHRONOS_validation".as_ptr() as *const i8])
             None,
         )
     }
@@ -476,7 +480,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         buffer
     };
 
-    let verical_raster_buffer = {
+    let vertical_raster_buffer = {
         let size = height as u64 * 10_000 as u64 * 4;
         let buffer = device
             .create_buffer(
@@ -512,6 +516,35 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
                 &vk::BufferCreateInfo::default().size(size).usage(
                     vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 ),
+                None,
+            )
+            .unwrap();
+
+        let requirements = device.get_buffer_memory_requirements(buffer);
+        let allocate_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(requirements.size)
+            .memory_type_index(
+                find_memorytype_index(
+                    &requirements,
+                    &memory_properties,
+                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                )
+                .unwrap(),
+            );
+
+        let memory = device.allocate_memory(&allocate_info, None).unwrap();
+        device.bind_buffer_memory(buffer, memory, 0).unwrap();
+
+        buffer
+    };
+
+    let out_buffer = {
+        let size = height as u64 * width as u64 * 4;
+        let buffer = device
+            .create_buffer(
+                &vk::BufferCreateInfo::default()
+                    .size(size)
+                    .usage(vk::BufferUsageFlags::STORAGE_BUFFER),
                 None,
             )
             .unwrap();
@@ -575,6 +608,11 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(4)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1),
     ];
 
     let set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
@@ -630,7 +668,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
     let pool_sizes = [
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_BUFFER,
-            descriptor_count: 3,
+            descriptor_count: 4,
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_IMAGE,
@@ -641,7 +679,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
     let descriptor_pool = device
         .create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
-                .max_sets(2)
+                .max_sets(1)
                 .pool_sizes(&pool_sizes),
             None,
         )
@@ -677,7 +715,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
                 .dst_binding(2)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .buffer_info(&[vk::DescriptorBufferInfo::default()
-                    .buffer(verical_raster_buffer)
+                    .buffer(vertical_raster_buffer)
                     .range(vk::WHOLE_SIZE)]),
             vk::WriteDescriptorSet::default()
                 .dst_set(descriptor_set)
@@ -685,6 +723,13 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .buffer_info(&[vk::DescriptorBufferInfo::default()
                     .buffer(horizontal_raster_buffer)
+                    .range(vk::WHOLE_SIZE)]),
+            vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_set)
+                .dst_binding(4)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&[vk::DescriptorBufferInfo::default()
+                    .buffer(out_buffer)
                     .range(vk::WHOLE_SIZE)]),
         ],
         &[],
@@ -702,6 +747,8 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
     let fence = device
         .create_fence(&vk::FenceCreateInfo::default(), None)
         .unwrap();
+
+    thread::sleep(Duration::from_secs(5));
 
     device
         .begin_command_buffer(
@@ -799,7 +846,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
             vk::BufferMemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
                 .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                .buffer(verical_raster_buffer)
+                .buffer(vertical_raster_buffer)
                 .size(vk::WHOLE_SIZE),
             vk::BufferMemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -831,8 +878,8 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
 
     device.cmd_dispatch(
         command_buffer,
-        width.div_ceil(8 * 8),
-        height.div_ceil(8 * 8),
+        width.div_ceil(8 * 3).div_ceil(1),
+        height.div_ceil(8 * 3).div_ceil(1),
         1,
     );
 

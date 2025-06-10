@@ -29,7 +29,7 @@ layout(set = 0, binding = 3) writeonly buffer HorizontalRaster {
 } horizontal;
 
 void main() {
-    const uint chunk_size = 8;
+    const uint chunk_size = 3;
 
     // uvec2 sg_size = uvec2(gl_SubgroupSize / 8, 8);
     

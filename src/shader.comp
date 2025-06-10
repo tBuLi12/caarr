@@ -28,7 +28,11 @@ layout(set = 0, binding = 3) readonly buffer HorizontalRaster {
     uint data[];
 } horizontal;
 
-const uint chunk_size = 8;
+layout(set = 0, binding = 4) writeonly buffer Out {
+    uint data[];
+} out_buffer;
+
+const uint chunk_size = 3;
 
 
 void main() {
@@ -86,15 +90,15 @@ void main() {
             uint shift = current_idx % 32;
             uint mask = (horizontal.data[gl_GlobalInvocationID.x * rects_count + current_idx / 32] & vertical.data[gl_GlobalInvocationID.y * rects_count + current_idx / 32]) >> shift;
             if ((mask & 1) != 0) {
-                            visited += 1;
-                // for (uint i = 0; i < chunk_size; i++) {
-                //     for (uint j = 0; j < chunk_size; j++) {
-                //         uvec2 px = px_start + uvec2(i, j);
-                //         if (all(greaterThanEqual(px, pos)) && all(lessThan(px, pos_end))) {
-                //             colors[i][j] = rect.bg_color.rgb;
-                //         }
-                //     }
-                // }
+                visited += 1;
+                for (uint i = 0; i < chunk_size; i++) {
+                    for (uint j = 0; j < chunk_size; j++) {
+                        uvec2 px = px_start + uvec2(i, j);
+                        if (all(greaterThanEqual(px, pos)) && all(lessThan(px, pos_end))) {
+                            colors[i][j] = rect.bg_color.rgb;
+                        }
+                    }
+                }
 
                 rect_idx = current_idx + 1;
                 current_idx = rect.children_start;
@@ -134,12 +138,11 @@ void main() {
     //     rect_idx = rect.parent_idx;
     // }
 
-    imageStore(image, ivec2(px_start), vec4(vec3(float(visited) / 500), 1.0));
-    // for (uint i = 0; i < chunk_size; i++) {
-    //     for (uint j = 0; j < chunk_size; j++) {
-    //         imageStore(image, ivec2(px_start + uvec2(i, j)), vec4(colors[i][j], 1.0));
-    //     }
-    // }
+    for (uint j = 0; j < chunk_size; j++) {
+        for (uint i = 0; i < chunk_size; i++) {
+            imageStore(image, ivec2(px_start + uvec2(i, j)), vec4(colors[i][j], 1.0));
+        }
+    }
 
     // imageStore(image, ivec2(gl_GlobalInvocationID.xy), vec4(colors[gl_LocalInvocationID.x][gl_LocalInvocationID.y], 1.0));
     // imageStore(image, ivec2(gl_GlobalInvocationID.xy), vec4(vec3(1.0, 0.0, 1.0), 1.0));
