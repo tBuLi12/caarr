@@ -16,6 +16,7 @@ struct Rect {
     size: [u32; 2],
     bg_color: BgColor,
     children: Vec<Rect>,
+    inline: bool,
 }
 
 fn main() {
@@ -38,6 +39,7 @@ fn main() {
             pos: [x, 0],
             size: [width, height],
             children: vec![],
+            inline: false,
         };
 
         for (i, &len) in line_lens.iter().enumerate() {
@@ -46,6 +48,7 @@ fn main() {
                 pos: [0, i as u32 * 35],
                 size: [len as u32 * 16, 22],
                 children: vec![],
+                inline: false,
             };
             for i in 0..len {
                 line.children.push(Rect {
@@ -53,6 +56,7 @@ fn main() {
                     pos: [i as u32 * 16, 0],
                     size: [15, 22],
                     children: vec![],
+                    inline: false,
                 });
             }
             container.children.push(line);
@@ -74,6 +78,7 @@ fn main() {
                 size: [outline_width, outline_height],
                 bg_color: BgColor([0.0, 1.0, 1.0, 1.0]),
                 children: vec![],
+                inline: false,
             };
 
             for (i, &len) in line_lens.iter().enumerate() {
@@ -82,6 +87,7 @@ fn main() {
                     pos: [0, i as u32 * 2],
                     size: [len as u32 * 2, 2],
                     children: vec![],
+                    inline: false,
                 };
 
                 for i in 0..len {
@@ -90,6 +96,7 @@ fn main() {
                         pos: [i as u32 * 2, 0],
                         size: [2, 2],
                         children: vec![],
+                        inline: false,
                     });
                 }
 
@@ -102,7 +109,9 @@ fn main() {
         container
     };
 
-    let rectangles: Vec<_> = (0..5).map(|i| get_page(i * width / 5, width / 5)).collect();
+    let mut rectangles: Vec<_> = (0..5).map(|i| get_page(i * width / 5, width / 5)).collect();
+
+    // split_children(&mut rectangles);
 
     // let rectangles = get_rects(
     //     &mut StdRng::seed_from_u64(4827493030),
@@ -126,7 +135,7 @@ fn main() {
     //             bg_color: BgColor([1.0, 0.0, 1.0, 1.0]),
     //             pos: [200.0, 20.0],
     //             size: [100.0, 100.0],
-    //         },
+    //         },ssss
     //     ],
     //     bg_color: BgColor([0.0, 0.0, 0.0, 1.0]),
     //     pos: [10.0, 10.0],
@@ -136,6 +145,42 @@ fn main() {
     unsafe {
         compute_tree::unsafe_main(&rectangles, width, height);
         // graphics_pipeline::unsafe_main(&rectangles, width, height);
+    }
+}
+
+fn split_children(rects: &mut Vec<Rect>) {
+    if rects.len() > 15 {
+        let new_rects: Vec<_> = rects
+            .chunks(15)
+            .map(|chunk| {
+                let x_min = chunk.iter().map(|rect| rect.pos[0]).min().unwrap();
+                let y_min = chunk.iter().map(|rect| rect.pos[1]).min().unwrap();
+                let x_max = chunk
+                    .iter()
+                    .map(|rect| rect.pos[0] + rect.size[0])
+                    .max()
+                    .unwrap();
+                let y_max = chunk
+                    .iter()
+                    .map(|rect| rect.pos[1] + rect.size[1])
+                    .max()
+                    .unwrap();
+
+                Rect {
+                    pos: [x_min, y_min],
+                    size: [x_max - x_min, y_max - y_min],
+                    bg_color: BgColor([0.0, 0.0, 0.0, 0.0]),
+                    children: chunk.to_vec(),
+                    inline: true,
+                }
+            })
+            .collect();
+
+        *rects = new_rects;
+    }
+
+    for rect in rects.iter_mut() {
+        split_children(&mut rect.children);
     }
 }
 
@@ -174,6 +219,7 @@ fn get_rects(
                     width / 2,
                     height / 2,
                 ),
+                inline: false,
             }
         })
         .collect()

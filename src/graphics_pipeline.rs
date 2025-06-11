@@ -515,102 +515,107 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         .command_pool(command_pool)
         .level(vk::CommandBufferLevel::PRIMARY);
 
-    let command_buffer = device
-        .allocate_command_buffers(&command_buffer_allocate_info)
-        .unwrap()[0];
+    for i in 0..5 {
+        let command_buffer = device
+            .allocate_command_buffers(&command_buffer_allocate_info)
+            .unwrap()[0];
 
-    device
-        .begin_command_buffer(
+        device
+            .begin_command_buffer(
+                command_buffer,
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )
+            .unwrap();
+
+        let clear_value = vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [0.0, 0.0, 0.0, 0.0],
+            },
+        };
+
+        let fence = device
+            .create_fence(&vk::FenceCreateInfo::default(), None)
+            .unwrap();
+
+        device.cmd_pipeline_barrier(
             command_buffer,
-            &vk::CommandBufferBeginInfo::default()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-        )
-        .unwrap();
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[vk::ImageMemoryBarrier::default()
+                .dst_access_mask(
+                    vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                        | vk::AccessFlags::COLOR_ATTACHMENT_READ,
+                )
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .layer_count(1)
+                        .level_count(1),
+                )
+                .image(image)],
+        );
 
-    let clear_value = vk::ClearValue {
-        color: vk::ClearColorValue {
-            float32: [0.0, 0.0, 0.0, 0.0],
-        },
-    };
+        device.cmd_begin_rendering(
+            command_buffer,
+            &vk::RenderingInfo::default()
+                .render_area(scissors[0])
+                .layer_count(1)
+                .color_attachments(&[vk::RenderingAttachmentInfo::default()
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .image_view(view)
+                    .clear_value(clear_value)
+                    .load_op(vk::AttachmentLoadOp::LOAD)
+                    .store_op(vk::AttachmentStoreOp::STORE)]),
+        );
 
+        device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
+
+        device.cmd_bind_descriptor_sets(
+            command_buffer,
+            vk::PipelineBindPoint::GRAPHICS,
+            pipeline_layout,
+            0,
+            &[descriptor_set],
+            &[],
+        );
+
+        device.cmd_push_constants(
+            command_buffer,
+            pipeline_layout,
+            vk::ShaderStageFlags::VERTEX,
+            0,
+            bytemuck::bytes_of(&[width as f32, height as f32]),
+        );
+
+        device.cmd_draw(command_buffer, 6, rectangles.len() as u32, 0, 0);
+
+        device.cmd_end_rendering(command_buffer);
+
+        device.end_command_buffer(command_buffer).unwrap();
+
+        let start = Instant::now();
+        device
+            .queue_submit(
+                queue,
+                &[vk::SubmitInfo::default().command_buffers(&[command_buffer])],
+                fence,
+            )
+            .unwrap();
+
+        device.wait_for_fences(&[fence], true, !0).unwrap();
+
+        let duration = start.elapsed();
+        println!("Duration: {:?}", duration);
+    }
     let fence = device
         .create_fence(&vk::FenceCreateInfo::default(), None)
         .unwrap();
-
-    device.cmd_pipeline_barrier(
-        command_buffer,
-        vk::PipelineStageFlags::ALL_COMMANDS,
-        vk::PipelineStageFlags::ALL_COMMANDS,
-        vk::DependencyFlags::empty(),
-        &[],
-        &[],
-        &[vk::ImageMemoryBarrier::default()
-            .dst_access_mask(
-                vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::COLOR_ATTACHMENT_READ,
-            )
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .layer_count(1)
-                    .level_count(1),
-            )
-            .image(image)],
-    );
-
-    device.cmd_begin_rendering(
-        command_buffer,
-        &vk::RenderingInfo::default()
-            .render_area(scissors[0])
-            .layer_count(1)
-            .color_attachments(&[vk::RenderingAttachmentInfo::default()
-                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .image_view(view)
-                .clear_value(clear_value)
-                .load_op(vk::AttachmentLoadOp::LOAD)
-                .store_op(vk::AttachmentStoreOp::STORE)]),
-    );
-
-    device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
-
-    device.cmd_bind_descriptor_sets(
-        command_buffer,
-        vk::PipelineBindPoint::GRAPHICS,
-        pipeline_layout,
-        0,
-        &[descriptor_set],
-        &[],
-    );
-
-    device.cmd_push_constants(
-        command_buffer,
-        pipeline_layout,
-        vk::ShaderStageFlags::VERTEX,
-        0,
-        bytemuck::bytes_of(&[width as f32, height as f32]),
-    );
-
-    device.cmd_draw(command_buffer, 6, rectangles.len() as u32, 0, 0);
-
-    device.cmd_end_rendering(command_buffer);
-
-    device.end_command_buffer(command_buffer).unwrap();
-
-    let start = Instant::now();
-    device
-        .queue_submit(
-            queue,
-            &[vk::SubmitInfo::default().command_buffers(&[command_buffer])],
-            fence,
-        )
-        .unwrap();
-
-    device.wait_for_fences(&[fence], true, !0).unwrap();
-
-    let duration = start.elapsed();
-    println!("Duration: {:?}", duration);
-
     let command_buffer = device
         .allocate_command_buffers(&command_buffer_allocate_info)
         .unwrap()[0];

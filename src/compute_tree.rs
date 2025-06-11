@@ -63,7 +63,15 @@ fn rects_to_gpu(rects: Vec<Rect>) -> Vec<GpuRect> {
             let start = gpu_rects.len() as u32;
             let pos = gpu_rects[gpu_rect_idx].pos;
             gpu_rects[gpu_rect_idx].children = [start, start + rect.children.len() as u32];
-            rects_to_gpu_rec(gpu_rects, &rect.children, gpu_rect_idx as u32 + 1, pos);
+            rects_to_gpu_rec(
+                gpu_rects,
+                &rect.children,
+                gpu_rect_idx as u32 + 1,
+                match rect.inline {
+                    true => parent_pos,
+                    false => pos,
+                },
+            );
         }
     }
 
@@ -80,6 +88,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         bg_color: BgColor([1.0, 1.0, 1.0, 1.0]),
         pos: [0, 0],
         size: [width, height],
+        inline: false,
     }]);
     println!("{:?}", rectangles.len());
     // println!("{:?}", rectangles[5]);
@@ -217,7 +226,8 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
     let instance = {
         entry.create_instance(
             &vk::InstanceCreateInfo::default()
-                .application_info(&vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3)), // .enabled_layer_names(&["VK_LAYER_KHRONOS_validation".as_ptr() as *const i8])
+                .application_info(&vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3))
+                .enabled_layer_names(&["VK_LAYER_KHRONOS_validation".as_ptr() as *const i8]),
             None,
         )
     }
@@ -740,165 +750,172 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
         .command_pool(command_pool)
         .level(vk::CommandBufferLevel::PRIMARY);
 
-    let command_buffer = device
-        .allocate_command_buffers(&command_buffer_allocate_info)
-        .unwrap()[0];
+    for i in 0..5 {
+        let command_buffer = device
+            .allocate_command_buffers(&command_buffer_allocate_info)
+            .unwrap()[0];
+        let fence = device
+            .create_fence(&vk::FenceCreateInfo::default(), None)
+            .unwrap();
 
-    let fence = device
-        .create_fence(&vk::FenceCreateInfo::default(), None)
-        .unwrap();
-
-    thread::sleep(Duration::from_secs(5));
-
-    device
-        .begin_command_buffer(
-            command_buffer,
-            &vk::CommandBufferBeginInfo::default()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-        )
-        .unwrap();
-
-    // device.cmd_pipeline_barrier(
-    //     command_buffer,
-    //     vk::PipelineStageFlags::ALL_COMMANDS,
-    //     vk::PipelineStageFlags::ALL_COMMANDS,
-    //     vk::DependencyFlags::empty(),
-    //     &[],
-    //     &[],
-    //     &[vk::ImageMemoryBarrier::default()
-    //         .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-    //         .old_layout(vk::ImageLayout::UNDEFINED)
-    //         .new_layout(vk::ImageLayout::GENERAL)
-    //         .subresource_range(
-    //             vk::ImageSubresourceRange::default()
-    //                 .aspect_mask(vk::ImageAspectFlags::COLOR)
-    //                 .layer_count(1)
-    //                 .level_count(1),
-    //         )
-    //         .image(image)],
-    // );
-
-    // device.cmd_clear_color_image(
-    //     command_buffer,
-    //     image,
-    //     vk::ImageLayout::GENERAL,
-    //     &vk::ClearColorValue {
-    //         uint32: [0, 0, 0, 0],
-    //     },
-    //     &[vk::ImageSubresourceRange::default()
-    //         .aspect_mask(vk::ImageAspectFlags::COLOR)
-    //         .layer_count(1)
-    //         .level_count(1)],
-    // );
-
-    device.cmd_pipeline_barrier(
-        command_buffer,
-        vk::PipelineStageFlags::ALL_COMMANDS,
-        vk::PipelineStageFlags::ALL_COMMANDS,
-        vk::DependencyFlags::empty(),
-        &[],
-        &[],
-        &[vk::ImageMemoryBarrier::default()
-            .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .layer_count(1)
-                    .level_count(1),
+        device
+            .begin_command_buffer(
+                command_buffer,
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
             )
-            .image(image)],
-    );
+            .unwrap();
 
-    device.cmd_bind_pipeline(
-        command_buffer,
-        vk::PipelineBindPoint::COMPUTE,
-        raster_pipeline,
-    );
+        device.cmd_pipeline_barrier(
+            command_buffer,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[vk::ImageMemoryBarrier::default()
+                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::GENERAL)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .layer_count(1)
+                        .level_count(1),
+                )
+                .image(image)],
+        );
 
-    device.cmd_bind_descriptor_sets(
-        command_buffer,
-        vk::PipelineBindPoint::COMPUTE,
-        pipeline_layout,
-        0,
-        &[descriptor_set],
-        &[],
-    );
+        device.cmd_clear_color_image(
+            command_buffer,
+            image,
+            vk::ImageLayout::GENERAL,
+            &vk::ClearColorValue {
+                uint32: [0, 0, 0, 0],
+            },
+            &[vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .layer_count(1)
+                .level_count(1)],
+        );
 
-    device.cmd_push_constants(
-        command_buffer,
-        pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE,
-        0,
-        bytemuck::bytes_of(&(rectangles.len() as u32)),
-    );
+        device.cmd_pipeline_barrier(
+            command_buffer,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[vk::ImageMemoryBarrier::default()
+                .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::GENERAL)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .layer_count(1)
+                        .level_count(1),
+                )
+                .image(image)],
+        );
 
-    device.cmd_dispatch(command_buffer, rectangles.len().div_ceil(64) as u32, 1, 1);
+        // device.cmd_bind_pipeline(
+        //     command_buffer,
+        //     vk::PipelineBindPoint::COMPUTE,
+        //     raster_pipeline,
+        // );
 
-    device.cmd_pipeline_barrier(
-        command_buffer,
-        vk::PipelineStageFlags::ALL_COMMANDS,
-        vk::PipelineStageFlags::ALL_COMMANDS,
-        vk::DependencyFlags::empty(),
-        &[],
-        &[
-            vk::BufferMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                .buffer(vertical_raster_buffer)
-                .size(vk::WHOLE_SIZE),
-            vk::BufferMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                .buffer(horizontal_raster_buffer)
-                .size(vk::WHOLE_SIZE),
-        ],
-        &[],
-    );
+        // device.cmd_bind_descriptor_sets(
+        //     command_buffer,
+        //     vk::PipelineBindPoint::COMPUTE,
+        //     pipeline_layout,
+        //     0,
+        //     &[descriptor_set],
+        //     &[],
+        // );
 
-    device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::COMPUTE, pipeline);
+        // device.cmd_push_constants(
+        //     command_buffer,
+        //     pipeline_layout,
+        //     vk::ShaderStageFlags::COMPUTE,
+        //     0,
+        //     bytemuck::bytes_of(&(rectangles.len() as u32)),
+        // );
 
-    device.cmd_bind_descriptor_sets(
-        command_buffer,
-        vk::PipelineBindPoint::COMPUTE,
-        pipeline_layout,
-        0,
-        &[descriptor_set],
-        &[],
-    );
+        // device.cmd_dispatch(command_buffer, rectangles.len().div_ceil(64) as u32, 1, 1);
 
-    device.cmd_push_constants(
-        command_buffer,
-        pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE,
-        0,
-        bytemuck::bytes_of(&(rectangles.len() as u32)),
-    );
+        device.cmd_pipeline_barrier(
+            command_buffer,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[
+                vk::BufferMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                    .buffer(vertical_raster_buffer)
+                    .size(vk::WHOLE_SIZE),
+                vk::BufferMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                    .buffer(horizontal_raster_buffer)
+                    .size(vk::WHOLE_SIZE),
+            ],
+            &[],
+        );
 
-    device.cmd_dispatch(
-        command_buffer,
-        width.div_ceil(8 * 3).div_ceil(1),
-        height.div_ceil(8 * 3).div_ceil(1),
-        1,
-    );
+        device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::COMPUTE, pipeline);
 
-    device.end_command_buffer(command_buffer).unwrap();
+        device.cmd_bind_descriptor_sets(
+            command_buffer,
+            vk::PipelineBindPoint::COMPUTE,
+            pipeline_layout,
+            0,
+            &[descriptor_set],
+            &[],
+        );
 
-    let start = Instant::now();
-    device
-        .queue_submit(
-            queue,
-            &[vk::SubmitInfo::default().command_buffers(&[command_buffer])],
-            fence,
-        )
-        .unwrap();
+        device.cmd_push_constants(
+            command_buffer,
+            pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            bytemuck::bytes_of(&(rectangles.len() as u32)),
+        );
 
-    device.wait_for_fences(&[fence], true, !0).unwrap();
+        // device.cmd_dispatch(
+        //     command_buffer,
+        //     width.div_ceil(32).div_ceil(1),
+        //     height.div_ceil(32).div_ceil(1),
+        //     1,
+        // );
 
-    let duration = start.elapsed();
-    println!("Duration: {:?}", duration);
+        device.cmd_dispatch(
+            command_buffer,
+            rectangles.len().div_ceil(1024) as u32,
+            // width.div_ceil(32).div_ceil(1),
+            1,
+            // height.div_ceil(32).div_ceil(1),
+            1,
+        );
 
+        device.end_command_buffer(command_buffer).unwrap();
+
+        let start = Instant::now();
+        device
+            .queue_submit(
+                queue,
+                &[vk::SubmitInfo::default().command_buffers(&[command_buffer])],
+                fence,
+            )
+            .unwrap();
+
+        device.wait_for_fences(&[fence], true, !0).unwrap();
+
+        let duration = start.elapsed();
+        println!("Duration: {:?}", duration);
+    }
     let command_buffer = device
         .allocate_command_buffers(&command_buffer_allocate_info)
         .unwrap()[0];

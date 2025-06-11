@@ -1,0 +1,56 @@
+#version 450
+
+#extension GL_KHR_shader_subgroup_arithmetic: enable
+#extension GL_KHR_shader_subgroup_vote: enable
+
+layout (local_size_x = 1024) in;
+
+struct Rect {
+    uvec2 pos;
+    uvec2 size;
+    vec4 bg_color;
+    uint parent_idx;
+    uint children_start;
+    uint children_end;
+};
+
+layout(set = 0, binding = 0) readonly buffer Rects {
+    Rect data[];
+} rects;
+
+layout (set = 0, binding = 1, rgba8) uniform image2D image;
+
+layout(set = 0, binding = 2) readonly buffer VerticalRaster {
+    uint data[];
+} vertical;
+
+layout(set = 0, binding = 3) readonly buffer HorizontalRaster {
+    uint data[];
+} horizontal;
+
+layout(set = 0, binding = 4) writeonly buffer Out {
+    uint data[];
+} out_buffer;
+
+const uint chunk_size = 3;
+
+
+void main() {
+    uint rect_idx = gl_GlobalInvocationID.x;
+    Rect rect = rects.data[rect_idx];
+
+    uvec2 start = rect.pos;
+    uvec2 end = start + rect.size;
+
+    uint area = (end.x - start.x) * (end.y - start.y);
+
+    if (area > 1024) {
+        return;
+    }
+
+    for (uint x = start.x; x < end.x; x += 1) {
+        for (uint y = start.y; y < end.y; y += 1) {
+            imageStore(image, ivec2(x, y), vec4(rect.bg_color.rgb, 1.0));
+        }
+    }
+}
