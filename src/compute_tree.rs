@@ -549,7 +549,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
     };
 
     let out_buffer = {
-        let size = height as u64 * width as u64 * 4;
+        let size = rectangles.len() as u64 * 2 * 4;
         let buffer = device
             .create_buffer(
                 &vk::BufferCreateInfo::default()
