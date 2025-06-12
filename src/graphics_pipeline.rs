@@ -419,8 +419,8 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
     }];
     let scissors = [vk::Rect2D {
         extent: vk::Extent2D {
-            width: width.div_ceil(1),
-            height: height.div_ceil(1),
+            width: width.div_ceil(8),
+            height: height.div_ceil(8),
         },
         offset: vk::Offset2D { x: 0, y: 0 },
     }];

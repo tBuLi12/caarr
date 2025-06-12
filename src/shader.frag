@@ -9,5 +9,5 @@ layout(location = 0) in RectData {
 
 void main() {
     outColor = vec4(rect.bg_color.rgb, 1.0);
-    outBlend = vec4(1.0);
+    outBlend = vec4(rect.bg_color.aaa, 1.0);
 }

@@ -52,7 +52,7 @@ fn main() {
             };
             for i in 0..len {
                 line.children.push(Rect {
-                    bg_color: BgColor([0.0, 0.0, 1.0, 0.5]),
+                    bg_color: BgColor([0.0, 0.0, 1.0, 1.0]),
                     pos: [i as u32 * 16, 0],
                     size: [15, 22],
                     children: vec![],
@@ -92,7 +92,7 @@ fn main() {
 
                 for i in 0..len {
                     line.children.push(Rect {
-                        bg_color: BgColor([0.0, 0.0, 1.0, 0.5]),
+                        bg_color: BgColor([0.0, 0.0, 1.0, 1.0]),
                         pos: [i as u32 * 2, 0],
                         size: [2, 2],
                         children: vec![],
@@ -103,7 +103,7 @@ fn main() {
                 outline.children.push(line);
             }
 
-            container.children.push(outline);
+            // container.children.push(outline);
         }
 
         container
@@ -111,7 +111,7 @@ fn main() {
 
     let mut rectangles: Vec<_> = (0..2).map(|i| get_page(i * width / 2, width / 2)).collect();
 
-    // split_children(&mut rectangles);
+    split_children(&mut rectangles);
 
     // let rectangles = get_rects(
     //     &mut StdRng::seed_from_u64(4827493030),
@@ -126,20 +126,29 @@ fn main() {
     //     children: vec![
     //         Rect {
     //             children: vec![],
-    //             bg_color: BgColor([0.0, 1.0, 1.0, 1.0]),
-    //             pos: [20.0, 20.0],
-    //             size: [100.0, 100.0],
+    //             bg_color: BgColor([0.0, 1.0, 1.0, 0.9]),
+    //             pos: [10, 10],
+    //             size: [100, 100],
+    //             inline: false,
     //         },
     //         Rect {
-    //             children: vec![],
+    //             children: vec![Rect {
+    //                 children: vec![],
+    //                 bg_color: BgColor([1.0, 1.0, 1.0, 1.0]),
+    //                 pos: [10, 10],
+    //                 size: [20, 20],
+    //                 inline: false,
+    //             }],
     //             bg_color: BgColor([1.0, 0.0, 1.0, 1.0]),
-    //             pos: [200.0, 20.0],
-    //             size: [100.0, 100.0],
-    //         },ssss
+    //             pos: [50, 20],
+    //             size: [100, 100],
+    //             inline: false,
+    //         },
     //     ],
     //     bg_color: BgColor([0.0, 0.0, 0.0, 1.0]),
-    //     pos: [10.0, 10.0],
-    //     size: [500.0, 500.0],
+    //     pos: [10, 10],
+    //     size: [500, 500],
+    //     inline: false,
     // }];
 
     unsafe {

@@ -32,6 +32,8 @@ layout(set = 0, binding = 4) writeonly buffer Out {
     uint data[];
 } out_buffer;
 
+const uint chunk_size = 2;
+
 void main() {
     uvec2 px = gl_GlobalInvocationID.yx;
     uvec2 px_start = subgroupMin(px);
@@ -63,18 +65,18 @@ void main() {
     // }
 
     while (current_idx < end_idx) {
-        if (subgroupAllEqual(current_idx)) {
-            uint offset = subgroupExclusiveAdd(1);
-            uint max_offset = subgroupMax(offset);
-            Rect rect = rects.data[current_idx + offset];
-            bool intersects = all(greaterThanEqual(px_end, rect.pos)) && all(lessThan(px_start, rect.pos + rect.size));
-            uint shift = subgroupMin(intersects ? offset : max_offset + 1);
-            current_idx += shift;
+        // if (subgroupAllEqual(current_idx)) {
+        //     uint offset = subgroupExclusiveAdd(1);
+        //     uint max_offset = subgroupMax(offset);
+        //     Rect rect = rects.data[current_idx + offset];
+        //     bool intersects = all(greaterThanEqual(px_end, rect.pos)) && all(lessThan(px_start, rect.pos + rect.size));
+        //     uint shift = subgroupMin(intersects ? offset : max_offset + 1);
+        //     current_idx += shift;
 
-            if (current_idx >= end_idx) {
-                break;
-            }
-        }
+        //     if (current_idx >= end_idx) {
+        //         break;
+        //     }
+        // }
 
         Rect rect = rects.data[current_idx];
 
@@ -99,6 +101,6 @@ void main() {
         rect_idx = rect.parent_idx;
     }
     
-    // imageStore(image, ivec2(gl_GlobalInvocationID.yx), vec4(color, 1.0));
-    imageStore(image, ivec2(gl_GlobalInvocationID.yx), vec4(vec3(float(gl_SubgroupID) / 40.0, float(0) / 255.0, 0.0), 1.0));
+    imageStore(image, ivec2(gl_GlobalInvocationID.yx), vec4(color, 1.0));
+    // imageStore(image, ivec2(gl_GlobalInvocationID.yx), vec4(vec3(float(gl_SubgroupID) / 40.0, float(0) / 255.0, 0.0), 1.0));
 }

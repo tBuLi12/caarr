@@ -895,8 +895,8 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
             command_buffer,
             // rectangles.len().div_ceil(1024) as u32,
             // 1,
-            height.div_ceil(8).div_ceil(1),
-            width.div_ceil(128).div_ceil(1),
+            width.div_ceil(32).div_ceil(2),
+            height.div_ceil(32).div_ceil(2),
             1,
         );
 

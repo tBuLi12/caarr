@@ -1,0 +1,138 @@
+#version 450
+
+#extension GL_KHR_shader_subgroup_arithmetic: enable
+#extension GL_KHR_shader_subgroup_vote: enable
+
+layout (local_size_x = 32, local_size_y = 32) in;
+
+struct Rect {
+    uvec2 pos;
+    uvec2 size;
+    vec4 bg_color;
+    uint parent_idx;
+    uint children_start;
+    uint children_end;
+};
+
+layout(set = 0, binding = 0) readonly buffer Rects {
+    Rect data[];
+} rects;
+
+layout (set = 0, binding = 1, rgba8) uniform image2D image;
+
+layout(set = 0, binding = 2) readonly buffer VerticalRaster {
+    uint data[];
+} vertical;
+
+layout(set = 0, binding = 3) readonly buffer HorizontalRaster {
+    uint data[];
+} horizontal;
+
+layout(set = 0, binding = 4) writeonly buffer Out {
+    uint data[];
+} out_buffer;
+
+const uint chunk_size = 2;
+
+void main() {
+    uvec2 px_start = gl_GlobalInvocationID.xy * chunk_size;
+    uvec2 px_end = px_start + chunk_size;
+    
+    uvec2 offset = uvec2(0);
+    uint rect_idx = 0;
+    uint current_idx = 0;
+    uint end_idx = 1;
+
+    while (current_idx < end_idx) {
+        Rect rect = rects.data[current_idx];
+        uvec2 pos = rect.pos;
+        uvec2 pos_end = pos + rect.size;
+
+        bool all_inside = all(greaterThanEqual(px_start, pos)) && all(lessThanEqual(px_end, pos_end));
+        bool any_inside = all(greaterThan(px_end, pos)) && all(lessThan(px_start, pos_end));
+
+        if (all_inside) {
+            rect_idx = current_idx + 1;
+            current_idx = rect.children_start;
+            end_idx = rect.children_end;
+        } else if (any_inside) {
+            break;
+        } else {
+            current_idx += 1;
+        }
+    }
+
+    uint g_rect_idx = rect_idx;
+    uint g_current_idx = current_idx;
+    uint g_end_idx = end_idx;
+    
+    for (uint j = 0; j < chunk_size; j++) {
+        for (uint i = 0; i < chunk_size; i++) {
+            vec3 color = vec3(0.0);
+            vec3 alphas = vec3(0.0);
+
+            uint rect_idx = g_rect_idx;
+            uint current_idx = g_current_idx;
+            uint end_idx = g_end_idx;
+        
+            uvec2 px = px_start + uvec2(i, j);
+
+            while (current_idx >= end_idx && rect_idx != 0) {
+                current_idx = rect_idx;
+                Rect parent = rects.data[current_idx - 1];
+
+                vec3 rect_color = parent.bg_color.rgb;
+                vec3 rect_alphas = parent.bg_color.aaa;
+                vec3 a = rect_alphas * (vec3(1.0) - alphas);
+                color += rect_color * a;
+                alphas += a;
+
+                rect_idx = parent.parent_idx;
+                if (parent.parent_idx == 0) {
+                    end_idx = 1;
+                } else {
+                    end_idx = rects.data[parent.parent_idx - 1].children_end;
+                }
+            }
+            
+            while (current_idx < end_idx) {
+                Rect rect = rects.data[current_idx];
+                uvec2 pos = rect.pos;
+                uvec2 pos_end = pos + rect.size;
+
+                if (all(greaterThanEqual(px, pos)) && all(lessThan(px, pos_end))) {
+                    rect_idx = current_idx + 1;
+                    current_idx = rect.children_start;
+                    end_idx = rect.children_end;
+                } else {
+                    current_idx += 1;
+                }
+
+                while (current_idx >= end_idx && rect_idx != 0) {
+                    current_idx = rect_idx;
+                    Rect parent = rects.data[current_idx - 1];
+
+                    vec3 rect_color = parent.bg_color.rgb;
+                    vec3 rect_alphas = parent.bg_color.aaa;
+                    vec3 a = rect_alphas * (vec3(1.0) - alphas);
+                    color += rect_color * a;
+                    alphas += a;
+
+                    rect_idx = parent.parent_idx;
+                    if (parent.parent_idx == 0) {
+                        end_idx = 1;
+                    } else {
+                        end_idx = rects.data[parent.parent_idx - 1].children_end;
+                    }
+                }
+            }
+
+            imageStore(image, ivec2(px_start + uvec2(i, j)), vec4(color, 1.0));
+        }
+    }
+
+    // for (uint j = 0; j < chunk_size; j++) {
+    //     for (uint i = 0; i < chunk_size; i++) {
+    //     }
+    // }
+}

@@ -35,9 +35,6 @@ layout(set = 0, binding = 4) writeonly buffer Out {
 const uint chunk_size = 32;
 
 void main() {
-    // uvec2 px_start = gl_WorkGroupID.xy * chunk_size;
-    // uvec2 px_end = px_start + chunk_size;
-
     uvec2 px = gl_GlobalInvocationID.xy;
     
     uvec2 offset = uvec2(0);
@@ -46,26 +43,17 @@ void main() {
     uint end_idx = 1;
 
     vec3 color = vec3(0.0);
+    vec3 alphas = vec3(0.0);
 
     while (current_idx < end_idx) {
-        // visited += 1;
-
         Rect rect = rects.data[current_idx];
         uvec2 pos = rect.pos;
         uvec2 pos_end = pos + rect.size;
 
         if (all(greaterThanEqual(px, pos)) && all(lessThan(px, pos_end))) {
-            color = rect.bg_color.rgb;
-
-            uint area = rect.size.x * rect.size.y;
-
-            if (area >= 1024 * 1024) {
-                rect_idx = current_idx + 1;
-                current_idx = rect.children_start;
-                end_idx = rect.children_end;
-            } else {
-                current_idx += 1;
-            }
+            rect_idx = current_idx + 1;
+            current_idx = rect.children_start;
+            end_idx = rect.children_end;
         } else {
             current_idx += 1;
         }
@@ -73,6 +61,13 @@ void main() {
         while (current_idx >= end_idx && rect_idx != 0) {
             current_idx = rect_idx;
             Rect parent = rects.data[current_idx - 1];
+
+            vec3 rect_color = parent.bg_color.rgb;
+            vec3 rect_alphas = parent.bg_color.aaa;
+            vec3 a = rect_alphas * (vec3(1.0) - alphas);
+            color += rect_color * a;
+            alphas += a;
+
             rect_idx = parent.parent_idx;
             if (parent.parent_idx == 0) {
                 end_idx = 1;
