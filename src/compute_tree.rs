@@ -241,7 +241,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
 
     physical_devices.sort_by_key(|&device| {
         match instance.get_physical_device_properties(device).device_type {
-            vk::PhysicalDeviceType::DISCRETE_GPU => 0,
+            vk::PhysicalDeviceType::DISCRETE_GPU => 6,
             vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
             vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
             vk::PhysicalDeviceType::CPU => 3,
@@ -893,10 +893,10 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
 
         device.cmd_dispatch(
             command_buffer,
-            rectangles.len().div_ceil(1024) as u32,
-            // width.div_ceil(32).div_ceil(1),
-            1,
-            // height.div_ceil(32).div_ceil(1),
+            // rectangles.len().div_ceil(1024) as u32,
+            // 1,
+            height.div_ceil(8).div_ceil(1),
+            width.div_ceil(128).div_ceil(1),
             1,
         );
 

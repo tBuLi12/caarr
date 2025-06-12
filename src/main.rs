@@ -30,8 +30,8 @@ fn main() {
 
     let width = 7680;
     let height = 4320 / 2;
-    // let width = 1920;
-    // let height = 1080;
+    let width = 1920;
+    let height = 1080;
 
     let get_page = |x: u32, width: u32| {
         let mut container = Rect {
@@ -68,7 +68,7 @@ fn main() {
         let line_lens: Vec<_> = fs::read_to_string("./src/graphics_pipeline.rs")
             .unwrap()
             .lines()
-            .take(600)
+            .take(200)
             .map(|line| line.len())
             .collect();
 
@@ -109,7 +109,7 @@ fn main() {
         container
     };
 
-    let mut rectangles: Vec<_> = (0..5).map(|i| get_page(i * width / 5, width / 5)).collect();
+    let mut rectangles: Vec<_> = (0..2).map(|i| get_page(i * width / 2, width / 2)).collect();
 
     // split_children(&mut rectangles);
 
@@ -149,9 +149,9 @@ fn main() {
 }
 
 fn split_children(rects: &mut Vec<Rect>) {
-    if rects.len() > 15 {
+    if rects.len() > 10 {
         let new_rects: Vec<_> = rects
-            .chunks(15)
+            .chunks(10)
             .map(|chunk| {
                 let x_min = chunk.iter().map(|rect| rect.pos[0]).min().unwrap();
                 let y_min = chunk.iter().map(|rect| rect.pos[1]).min().unwrap();

@@ -1,13 +1,11 @@
 use std::{
     ffi,
     mem::{self, offset_of},
-    ops::Range,
     ptr,
     time::Instant,
 };
 
 use ash::vk::{self, PipelineMultisampleStateCreateInfo};
-use rand::{rngs::StdRng, Rng, SeedableRng};
 
 use crate::BgColor;
 
@@ -83,7 +81,7 @@ pub unsafe fn unsafe_main(rectangles: &[Rect], width: u32, height: u32) {
 
     physical_devices.sort_by_key(|&device| {
         match instance.get_physical_device_properties(device).device_type {
-            vk::PhysicalDeviceType::DISCRETE_GPU => 0,
+            vk::PhysicalDeviceType::DISCRETE_GPU => 6,
             vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
             vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
             vk::PhysicalDeviceType::CPU => 3,

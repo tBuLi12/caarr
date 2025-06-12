@@ -1,0 +1,104 @@
+#version 450
+
+#extension GL_KHR_shader_subgroup_arithmetic: enable
+#extension GL_KHR_shader_subgroup_vote: enable
+
+layout (local_size_x = 8, local_size_y = 128) in;
+
+struct Rect {
+    uvec2 pos;
+    uvec2 size;
+    vec4 bg_color;
+    uint parent_idx;
+    uint children_start;
+    uint children_end;
+};
+
+layout(set = 0, binding = 0) readonly buffer Rects {
+    Rect data[];
+} rects;
+
+layout (set = 0, binding = 1, rgba8) uniform image2D image;
+
+layout(set = 0, binding = 2) readonly buffer VerticalRaster {
+    uint data[];
+} vertical;
+
+layout(set = 0, binding = 3) readonly buffer HorizontalRaster {
+    uint data[];
+} horizontal;
+
+layout(set = 0, binding = 4) writeonly buffer Out {
+    uint data[];
+} out_buffer;
+
+void main() {
+    uvec2 px = gl_GlobalInvocationID.yx;
+    uvec2 px_start = subgroupMin(px);
+    uvec2 px_end = subgroupMax(px);
+    uint rect_idx = 0;
+    uint current_idx = 0;
+    uint end_idx = 1;
+
+    // while (current_idx < end_idx) {
+    //     Rect rect = rects.data[min(current_idx + gl_SubgroupInvocationID, end_idx - 1)];
+    //     uvec2 pos = uvec2(rect.pos);
+    //     uvec2 pos_end = pos + uvec2(rect.size);
+    //     bool inside = all(greaterThanEqual(px_start, pos)) && all(lessThanEqual(px_end, pos + rect.size));
+    //     uint first_inside = subgroupMin(inside ? gl_SubgroupInvocationID : 0xFFFFFFFF);
+    //     if (first_inside != 0xFFFFFFFF) {
+    //         current_idx += first_inside;
+    //         Rect rect = rects.data[current_idx];
+    //         rect_idx = current_idx + 1;
+    //         current_idx = rect.children_start;
+    //         end_idx = rect.children_end;
+    //     } else {
+    //         bool intersects = !(px_end.x < pos.x || px_start.x > pos_end.x || px_end.y < pos.y || px_start.y > pos_end.y);
+    //         uint first_intersecting = subgroupMin(intersects ? gl_SubgroupInvocationID : 0xFFFFFFFF);
+    //         current_idx += min(first_intersecting, gl_SubgroupSize);
+    //         if (first_intersecting != 0xFFFFFFFF) {
+    //             break;
+    //         }
+    //     }
+    // }
+
+    while (current_idx < end_idx) {
+        if (subgroupAllEqual(current_idx)) {
+            uint offset = subgroupExclusiveAdd(1);
+            uint max_offset = subgroupMax(offset);
+            Rect rect = rects.data[current_idx + offset];
+            bool intersects = all(greaterThanEqual(px_end, rect.pos)) && all(lessThan(px_start, rect.pos + rect.size));
+            uint shift = subgroupMin(intersects ? offset : max_offset + 1);
+            current_idx += shift;
+
+            if (current_idx >= end_idx) {
+                break;
+            }
+        }
+
+        Rect rect = rects.data[current_idx];
+
+        if (all(greaterThanEqual(px, rect.pos)) && all(lessThan(px, rect.pos + rect.size))) {
+            rect_idx = current_idx + 1;
+            current_idx = rect.children_start;
+            end_idx = rect.children_end;
+        } else {
+            current_idx += 1;
+        }
+    }
+
+    vec3 color = vec3(0.0);
+    vec3 alphas = vec3(0.0);
+    while (all(lessThan(alphas, vec3(1.0))) && rect_idx != 0) { 
+        Rect rect = rects.data[rect_idx - 1];
+        vec3 rect_color = rect.bg_color.rgb;
+        vec3 rect_alphas = rect.bg_color.aaa;
+        vec3 a = rect_alphas * (vec3(1.0) - alphas);
+        color += rect_color * a;
+        alphas += a;
+        rect_idx = rect.parent_idx;
+    }
+    
+    // imageStore(image, ivec2(gl_GlobalInvocationID.yx), vec4(color, 1.0));
+    imageStore(image, ivec2(gl_GlobalInvocationID.yx), vec4(vec3(float(gl_SubgroupID) / 40.0, float(0) / 255.0, 0.0), 1.0));
+}
