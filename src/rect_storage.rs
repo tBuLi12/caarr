@@ -242,6 +242,29 @@ impl RectStorage {
         }
     }
 
+    pub fn remove_from_parent(&mut self, ref_idx: RefIdx) {
+        unsafe {
+            let dst = self.rect_allocator.alloc(1);
+            let src = self.ref_allocator.resolve(ref_idx).rect_idx;
+            self.move_rect(src, dst);
+
+            let parent_idx = (*self.resolve_rect(ref_idx)).parent_idx;
+            if let Some(parent_idx) = parent_idx.checked_sub(1) {
+                let parent_data = &mut *self.rect_allocator.resolve(RectIdx { inner: parent_idx });
+                parent_data.children_end -= 1;
+
+                for child_idx in src.inner..parent_data.children_end {
+                    self.move_rect(
+                        RectIdx {
+                            inner: child_idx + 1,
+                        },
+                        RectIdx { inner: child_idx },
+                    );
+                }
+            }
+        }
+    }
+
     pub fn clear_children(&mut self, ref_idx: RefIdx) {
         unsafe {
             let rect_data = &mut *self.resolve_rect(ref_idx);
@@ -393,6 +416,13 @@ impl RectStorage {
             let rect = &mut *self.resolve_rect(ref_idx);
             rect.x = x;
             rect.y = y;
+        }
+    }
+
+    pub fn get_size(&mut self, ref_idx: RefIdx) -> (u32, u32) {
+        unsafe {
+            let rect = &*self.resolve_rect(ref_idx);
+            (rect.width, rect.height)
         }
     }
 

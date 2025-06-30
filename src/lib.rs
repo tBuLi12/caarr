@@ -7,7 +7,7 @@ use rect_storage::RefIdx;
 use std::{cell::RefCell, collections::HashMap, error::Error, ffi::CStr, mem, ptr, time::Instant};
 use winit::{
     event::{ElementState, WindowEvent},
-    keyboard::{self, NamedKey},
+    event_loop::EventLoopProxy,
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     window::WindowAttributes,
 };
@@ -17,40 +17,48 @@ use crate::rect_storage::RectStorage;
 mod rect_storage;
 
 pub fn run_app<A: App>(app: A) {
-    // let start = Instant::now();
-    // rect.new_child();
-    // rect.new_child();
-    // rect.new_child();
-    // let child = rect.new_child();
-    // rect.new_child();
-
-    // child.new_child();
-    // child.new_child();
-    // child.new_child();
-    // child.new_child();
-    // child.new_child();
-    // child.new_child();
-    // child.new_child();
-    // child.new_child();
-    // child.new_child();
-    // child.new_child();
-    // child.new_child();
-
-    // eprintln!("{:?}", start.elapsed());
-    // rect.debug();
-
-    winit::event_loop::EventLoop::builder()
+    let event_loop = winit::event_loop::EventLoop::with_user_event()
         .build()
-        .unwrap()
-        .run_app(&mut WinitApp::new(app).unwrap())
+        .unwrap();
+
+    let proxy = event_loop.create_proxy();
+
+    event_loop
+        .run_app(&mut WinitApp::new(app, EventChannel { proxy }).unwrap())
         .unwrap();
 }
+
+pub use winit::keyboard::{Key, NamedKey, NativeKey};
+
 pub trait App {
-    fn init(&mut self, root: &Rect);
-    fn on_key_event(&mut self, str: &str);
+    type Event: 'static;
+
+    fn init(&mut self, root: &Rect, width: u32, height: u32, channel: EventChannel<Self::Event>);
+    fn on_key_event(&mut self, key: Key<&str>);
+    fn on_resize(&mut self, width: u32, height: u32);
+    fn on_event(&mut self, event: Self::Event);
+}
+
+pub struct EventChannel<E: 'static> {
+    proxy: EventLoopProxy<E>,
+}
+
+impl<E: 'static> Clone for EventChannel<E> {
+    fn clone(&self) -> Self {
+        Self {
+            proxy: self.proxy.clone(),
+        }
+    }
+}
+
+impl<E: 'static> EventChannel<E> {
+    pub fn send_event(&self, event: E) {
+        let _ = self.proxy.send_event(event);
+    }
 }
 
 struct WinitApp<A: App> {
+    event_channel: EventChannel<A::Event>,
     view_ctx: Option<ViewCtx>,
     vk_rects: Option<VkRects>,
     recreate_swapchain: bool,
@@ -60,8 +68,9 @@ struct WinitApp<A: App> {
 }
 
 impl<A: App> WinitApp<A> {
-    fn new(app: A) -> Result<Self, Box<dyn Error>> {
+    fn new(app: A, event_channel: EventChannel<A::Event>) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
+            event_channel,
             view_ctx: None,
             vk_rects: None,
             recreate_swapchain: false,
@@ -69,6 +78,18 @@ impl<A: App> WinitApp<A> {
             root: Rect::new(),
             app,
         })
+    }
+
+    fn flush_rects_and_request_render(&mut self) {
+        STORAGE.with_borrow(|storage| {
+            TLS.with_borrow_mut(|tls| {
+                let vulkan_ctx = &mut tls.as_mut().unwrap().vk_ctx;
+
+                vulkan_ctx
+                    .update_rectangles(storage.allocated_span(), self.vk_rects.as_mut().unwrap());
+                vulkan_ctx.window.request_redraw();
+            })
+        });
     }
 }
 
@@ -831,11 +852,13 @@ struct FrameCtx {
     rendered: vk::Semaphore,
 }
 
-impl<A: App> winit::application::ApplicationHandler<()> for WinitApp<A> {
+impl<A: App> winit::application::ApplicationHandler<A::Event> for WinitApp<A> {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let window = event_loop
             .create_window(WindowAttributes::default())
             .unwrap();
+
+        let size = window.inner_size();
 
         let vulkan_ctx = VulkanCtx::new(window).unwrap();
         let view_ctx = ViewCtx::new(&vulkan_ctx, None).unwrap();
@@ -852,7 +875,12 @@ impl<A: App> winit::application::ApplicationHandler<()> for WinitApp<A> {
             text_renderer: TextRenderer::new(),
         }));
 
-        self.app.init(&self.root);
+        self.app.init(
+            &self.root,
+            size.width,
+            size.height,
+            self.event_channel.clone(),
+        );
 
         TLS.with_borrow_mut(|tls| {
             STORAGE.with_borrow(|storage| {
@@ -1040,7 +1068,7 @@ impl<A: App> winit::application::ApplicationHandler<()> for WinitApp<A> {
                         &[],
                     );
 
-                    device.cmd_dispatch(command_buffer, width.div_ceil(8), height.div_ceil(8), 1);
+                    device.cmd_dispatch(command_buffer, width.div_ceil(32), height.div_ceil(32), 1);
 
                     device.cmd_pipeline_barrier(
                         command_buffer,
@@ -1124,6 +1152,12 @@ impl<A: App> winit::application::ApplicationHandler<()> for WinitApp<A> {
                     }
                 });
             },
+            WindowEvent::Resized(size) => {
+                if self.vk_rects.is_some() {
+                    self.app.on_resize(size.width, size.height);
+                }
+                self.flush_rects_and_request_render();
+            }
             WindowEvent::KeyboardInput {
                 device_id,
                 event,
@@ -1133,30 +1167,17 @@ impl<A: App> winit::application::ApplicationHandler<()> for WinitApp<A> {
                     return;
                 }
 
-                match event.logical_key {
-                    keyboard::Key::Character(str) => {
-                        self.app.on_key_event(&str);
-                    }
-                    keyboard::Key::Named(NamedKey::Space) => {
-                        self.app.on_key_event(" ");
-                    }
-                    _ => {}
-                }
+                self.app.on_key_event(event.logical_key.as_ref());
 
-                STORAGE.with_borrow(|storage| {
-                    TLS.with_borrow_mut(|tls| {
-                        let vulkan_ctx = &mut tls.as_mut().unwrap().vk_ctx;
-
-                        vulkan_ctx.update_rectangles(
-                            storage.allocated_span(),
-                            self.vk_rects.as_mut().unwrap(),
-                        );
-                        vulkan_ctx.window.request_redraw();
-                    })
-                });
+                self.flush_rects_and_request_render();
             }
             _ => {}
         }
+    }
+
+    fn user_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, event: A::Event) {
+        self.app.on_event(event);
+        self.flush_rects_and_request_render();
     }
 }
 
@@ -1360,7 +1381,7 @@ impl TextRenderer {
                 clusters.push(Cluster {
                     start: cluster.source.start,
                     end: cluster.source.end,
-                    px_offset: glyphs.last().map_or(0, |g| g.left as u32 + g.width),
+                    px_offset: advance as u32,
                 });
             } else {
                 // clusters.push(Cluster {
@@ -1444,6 +1465,10 @@ impl Rect {
         STORAGE.with_borrow_mut(|storage| storage.clear_children(self.ref_idx))
     }
 
+    pub fn remove_from_parent(&self) {
+        STORAGE.with_borrow_mut(|storage| storage.remove_from_parent(self.ref_idx))
+    }
+
     pub fn new_text_child(&self) -> TextLine {
         let rect = self.new_child();
         TextLine {
@@ -1466,6 +1491,10 @@ impl Rect {
 
     pub fn set_pos(&self, x: u32, y: u32) {
         STORAGE.with_borrow_mut(|storage| storage.set_pos(self.ref_idx, x, y))
+    }
+
+    pub fn get_size(&self) -> (u32, u32) {
+        STORAGE.with_borrow_mut(|storage| storage.get_size(self.ref_idx))
     }
 
     pub fn append_child(&self, child: &Rect) {
