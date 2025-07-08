@@ -191,6 +191,11 @@ impl RectStorage {
     }
 
     pub fn new_child(&mut self, ref_idx: RefIdx) -> RefIdx {
+        let data = unsafe { self.resolve_rect(ref_idx).read() };
+        self.new_child_at(data.children_end - data.children_start, ref_idx)
+    }
+
+    pub fn new_child_at(&mut self, idx: u32, ref_idx: RefIdx) -> RefIdx {
         self.ensure_not_full(ref_idx);
 
         unsafe {
@@ -198,7 +203,7 @@ impl RectStorage {
             let rect = &mut *self.rect_allocator.resolve(rect_idx);
 
             let child_rect_idx = RectIdx {
-                inner: rect.children_end,
+                inner: rect.children_start + idx,
             };
 
             rect.children_end += 1;
@@ -207,6 +212,18 @@ impl RectStorage {
                 ref_count: 1,
                 rect_idx: child_rect_idx,
             });
+
+            let start = rect.children_start + idx;
+            let end = rect.children_end - 1;
+
+            for child_idx in (start..end).rev() {
+                self.move_rect(
+                    RectIdx { inner: child_idx },
+                    RectIdx {
+                        inner: child_idx + 1,
+                    },
+                );
+            }
 
             self.rect_allocator.resolve(child_rect_idx).write(RectData {
                 x: 0,
@@ -411,7 +428,7 @@ impl RectStorage {
         }
     }
 
-    pub fn set_pos(&mut self, ref_idx: RefIdx, x: u32, y: u32) {
+    pub fn set_pos(&mut self, ref_idx: RefIdx, x: i32, y: i32) {
         unsafe {
             let rect = &mut *self.resolve_rect(ref_idx);
             rect.x = x;

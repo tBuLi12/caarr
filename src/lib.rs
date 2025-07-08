@@ -4,9 +4,17 @@ use ash::{
 };
 use etagere::{euclid::Size2D, Size};
 use rect_storage::RefIdx;
-use std::{cell::RefCell, collections::HashMap, error::Error, ffi::CStr, mem, ptr, time::Instant};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    error::Error,
+    ffi::CStr,
+    mem, ptr,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Instant,
+};
 use winit::{
-    event::{ElementState, WindowEvent},
+    event::{ElementState, Modifiers, WindowEvent},
     event_loop::EventLoopProxy,
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     window::WindowAttributes,
@@ -28,13 +36,13 @@ pub fn run_app<A: App>(app: A) {
         .unwrap();
 }
 
-pub use winit::keyboard::{Key, NamedKey, NativeKey};
+pub use winit::keyboard::{Key, ModifiersState, NamedKey, NativeKey};
 
 pub trait App {
     type Event: 'static;
 
     fn init(&mut self, root: &Rect, width: u32, height: u32, channel: EventChannel<Self::Event>);
-    fn on_key_event(&mut self, key: Key<&str>);
+    fn on_key_event(&mut self, key: Key<&str>, modifiers: ModifiersState);
     fn on_resize(&mut self, width: u32, height: u32);
     fn on_event(&mut self, event: Self::Event);
 }
@@ -63,6 +71,7 @@ struct WinitApp<A: App> {
     vk_rects: Option<VkRects>,
     recreate_swapchain: bool,
     render_start: Option<Instant>,
+    modifiers: Modifiers,
     root: Rect,
     app: A,
 }
@@ -75,6 +84,7 @@ impl<A: App> WinitApp<A> {
             vk_rects: None,
             recreate_swapchain: false,
             render_start: None,
+            modifiers: Modifiers::default(),
             root: Rect::new(),
             app,
         })
@@ -321,6 +331,7 @@ impl VulkanCtx {
     }
 
     fn update_rectangles(&mut self, new_rects: &[RectData], vk_rects: &mut VkRects) {
+        // dbg!(&new_rects);
         unsafe {
             if vk_rects.capacity < new_rects.len() as u32 {
                 self.device.destroy_buffer(vk_rects.buffer, None);
@@ -346,8 +357,8 @@ impl VulkanCtx {
                 let [r, g, b, a] = rect.bg_color;
 
                 let rect = VkRect {
-                    pos: [rect.x as f32, rect.y as f32],
-                    size: [rect.width as f32, rect.height as f32],
+                    pos: [rect.x, rect.y],
+                    size: [rect.width as i32, rect.height as i32],
                     bg_color: [
                         r as f32 / 255.0,
                         g as f32 / 255.0,
@@ -1158,6 +1169,9 @@ impl<A: App> winit::application::ApplicationHandler<A::Event> for WinitApp<A> {
                 }
                 self.flush_rects_and_request_render();
             }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers;
+            }
             WindowEvent::KeyboardInput {
                 device_id,
                 event,
@@ -1167,7 +1181,8 @@ impl<A: App> winit::application::ApplicationHandler<A::Event> for WinitApp<A> {
                     return;
                 }
 
-                self.app.on_key_event(event.logical_key.as_ref());
+                self.app
+                    .on_key_event(event.logical_key.as_ref(), self.modifiers.state());
 
                 self.flush_rects_and_request_render();
             }
@@ -1189,8 +1204,8 @@ pub fn debug() {
 #[derive(Clone, Copy)]
 #[repr(C, align(16))]
 struct VkRect {
-    pos: [f32; 2],
-    size: [f32; 2],
+    pos: [i32; 2],
+    size: [i32; 2],
     bg_color: [f32; 4],
     tex_position: [u32; 2],
     parent_idx: u32,
@@ -1212,11 +1227,11 @@ impl TextLine {
         }
     }
 
-    pub fn set_text(&mut self, text: &str) {
+    pub fn set_text(&mut self, font: Font, text: &str) {
         let line = TLS.with_borrow_mut(|tls| {
             let tls = tls.as_mut().unwrap();
             tls.text_renderer
-                .get_glyphs(text, &mut tls.atlas, &mut tls.vk_ctx)
+                .get_glyphs(text, font, &mut tls.atlas, &mut tls.vk_ctx)
         });
 
         let height = 40.0;
@@ -1242,8 +1257,8 @@ impl TextLine {
             // dbg!(&child);
             child.set_size(glyph.width as u32, glyph.height as u32);
             child.set_pos(
-                glyph.left as u32,
-                (((height + line.x_height) / 2.0) as i32 - glyph.top) as usize as u32,
+                glyph.left,
+                ((height + line.x_height) / 2.0) as i32 - glyph.top,
             );
             // dbg!(glyph.texture_x, glyph.texture_y);
             child.set_tex_position([glyph.texture_x, glyph.texture_y]);
@@ -1263,7 +1278,7 @@ impl TextLine {
 struct TextRenderer {
     shape_context: swash::shape::ShapeContext,
     scale_context: swash::scale::ScaleContext,
-    glyph_cache: HashMap<u16, CachedGlyph>,
+    glyph_cache: HashMap<(u64, u16), CachedGlyph>,
 }
 
 #[derive(Clone, Copy)]
@@ -1288,6 +1303,25 @@ struct RenderedLine {
     x_height: f32,
 }
 
+#[derive(Clone, Copy)]
+pub struct Font<'d> {
+    id: u64,
+    font_ref: swash::FontRef<'d>,
+    size: f32,
+}
+
+static NEXT_FONT_ID: AtomicU64 = AtomicU64::new(0);
+
+impl<'d> Font<'d> {
+    pub fn new(data: &'d [u8], font_idx: usize, size: f32) -> Self {
+        Self {
+            id: NEXT_FONT_ID.fetch_add(1, Ordering::Relaxed),
+            font_ref: swash::FontRef::from_index(data, font_idx).unwrap(),
+            size,
+        }
+    }
+}
+
 impl TextRenderer {
     pub fn new() -> Self {
         Self {
@@ -1300,20 +1334,22 @@ impl TextRenderer {
     pub fn get_glyphs(
         &mut self,
         text: &str,
+        font: Font,
         atlas: &mut Atlas,
         vk_ctx: &VulkanCtx,
     ) -> RenderedLine {
-        let size = 30.0;
-        let font = swash::FontRef::from_index(include_bytes!("../ARIAL.TTF"), 0).unwrap();
-
-        let mut shaper = self.shape_context.builder(font).size(size).build();
+        let mut shaper = self
+            .shape_context
+            .builder(font.font_ref)
+            .size(font.size)
+            .build();
 
         let x_height = shaper.metrics().x_height;
 
         let mut scaler = self
             .scale_context
-            .builder(font)
-            .size(size)
+            .builder(font.font_ref)
+            .size(font.size)
             .hint(true)
             .build();
 
@@ -1338,7 +1374,7 @@ impl TextRenderer {
 
                     advance += glyph.advance;
 
-                    if let Some(cached_glyph) = self.glyph_cache.get(&glyph.id) {
+                    if let Some(cached_glyph) = self.glyph_cache.get(&(font.id, glyph.id)) {
                         break 'glyph (*cached_glyph, x, y);
                     }
 
@@ -1359,7 +1395,7 @@ impl TextRenderer {
                     let [texture_x, texture_y] =
                         atlas.upload_glyph(&vk_ctx, &image.data, width, height);
 
-                    let mut cached_glyph = CachedGlyph {
+                    let cached_glyph = CachedGlyph {
                         left: image.placement.left,
                         top: image.placement.top,
                         width,
@@ -1368,7 +1404,7 @@ impl TextRenderer {
                         texture_y,
                     };
 
-                    self.glyph_cache.insert(glyph.id, cached_glyph);
+                    self.glyph_cache.insert((font.id, glyph.id), cached_glyph);
 
                     (cached_glyph, x, y)
                 };
@@ -1405,8 +1441,8 @@ impl TextRenderer {
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 struct RectData {
-    x: u32,
-    y: u32,
+    x: i32,
+    y: i32,
     width: u32,
     height: u32,
     bg_color: [u8; 4],
@@ -1461,6 +1497,12 @@ impl Rect {
         })
     }
 
+    pub fn new_child_at(&self, idx: u32) -> Self {
+        STORAGE.with_borrow_mut(|storage| Rect {
+            ref_idx: storage.new_child_at(idx, self.ref_idx),
+        })
+    }
+
     pub fn clear_children(&self) {
         STORAGE.with_borrow_mut(|storage| storage.clear_children(self.ref_idx))
     }
@@ -1489,7 +1531,7 @@ impl Rect {
         STORAGE.with_borrow_mut(|storage| storage.set_size(self.ref_idx, width, height))
     }
 
-    pub fn set_pos(&self, x: u32, y: u32) {
+    pub fn set_pos(&self, x: i32, y: i32) {
         STORAGE.with_borrow_mut(|storage| storage.set_pos(self.ref_idx, x, y))
     }
 
