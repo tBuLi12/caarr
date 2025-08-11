@@ -3,12 +3,12 @@ use ash::{
     vk,
 };
 use etagere::{euclid::Size2D, Size};
-use rect_storage::RefIdx;
 use std::{
     cell::RefCell,
     collections::HashMap,
     error::Error,
     ffi::CStr,
+    hash::Hash,
     mem, ptr,
     sync::atomic::{AtomicU64, Ordering},
     time::Instant,
@@ -20,32 +20,51 @@ use winit::{
     window::WindowAttributes,
 };
 
-use crate::rect_storage::RectStorage;
-
 mod rect_storage;
-
-pub fn run_app<A: App>(app: A) {
-    let event_loop = winit::event_loop::EventLoop::with_user_event()
-        .build()
-        .unwrap();
-
-    let proxy = event_loop.create_proxy();
-
-    event_loop
-        .run_app(&mut WinitApp::new(app, EventChannel { proxy }).unwrap())
-        .unwrap();
-}
 
 pub use winit::keyboard::{Key, ModifiersState, NamedKey, NativeKey};
 
-pub trait App {
+use crate::rect_storage::Rect;
+
+pub struct App<S: State> {
+    state: S,
+    channel: EventChannel<S::Event>,
+}
+
+impl<S: State> App<S> {
+    pub fn run(self, state: S) {
+        let event_loop = winit::event_loop::EventLoop::with_user_event()
+            .build()
+            .unwrap();
+
+        let proxy = event_loop.create_proxy();
+
+        event_loop
+            .run_app(&mut WinitApp::new(state, EventChannel { proxy }))
+            .unwrap();
+    }
+}
+
+pub trait State: Sized {
     type Event: 'static;
 
-    fn init(&mut self, root: &Rect, width: u32, height: u32, channel: EventChannel<Self::Event>);
-    fn on_key_event(&mut self, key: Key<&str>, modifiers: ModifiersState);
-    fn on_resize(&mut self, width: u32, height: u32);
-    fn on_event(&mut self, event: Self::Event);
+    fn on_key_event(app: &mut App<Self>, event: KeyEvent);
+    fn on_event(app: &mut App<Self>, event: Self::Event);
+    fn render(&self) -> Rect;
 }
+
+pub struct KeyEvent<'s> {
+    key: Key<&'s str>,
+    modifiers: ModifiersState,
+}
+
+// pub trait Render: Hash {
+//     fn render(&self) -> Rect;
+
+//     fn render_cached(&self) -> Rect {
+//         todo!()
+//     }
+// }
 
 pub struct EventChannel<E: 'static> {
     proxy: EventLoopProxy<E>,
@@ -65,41 +84,37 @@ impl<E: 'static> EventChannel<E> {
     }
 }
 
-struct WinitApp<A: App> {
-    event_channel: EventChannel<A::Event>,
+struct WinitApp<S: State> {
     view_ctx: Option<ViewCtx>,
     vk_rects: Option<VkRects>,
+    vk_indices: Option<VkIndices>,
     recreate_swapchain: bool,
     render_start: Option<Instant>,
     modifiers: Modifiers,
-    root: Rect,
-    app: A,
+    app: App<S>,
 }
 
-impl<A: App> WinitApp<A> {
-    fn new(app: A, event_channel: EventChannel<A::Event>) -> Result<Self, Box<dyn Error>> {
-        Ok(Self {
-            event_channel,
+impl<S: State> WinitApp<S> {
+    fn new(state: S, event_channel: EventChannel<S::Event>) -> Self {
+        Self {
             view_ctx: None,
             vk_rects: None,
+            vk_indices: None,
             recreate_swapchain: false,
             render_start: None,
             modifiers: Modifiers::default(),
-            root: Rect::new(),
-            app,
-        })
+            app: App {
+                state,
+                channel: event_channel,
+            },
+        }
     }
 
     fn flush_rects_and_request_render(&mut self) {
-        STORAGE.with_borrow(|storage| {
-            TLS.with_borrow_mut(|tls| {
-                let vulkan_ctx = &mut tls.as_mut().unwrap().vk_ctx;
-
-                vulkan_ctx
-                    .update_rectangles(storage.allocated_span(), self.vk_rects.as_mut().unwrap());
-                vulkan_ctx.window.request_redraw();
-            })
-        });
+        TLS.with_borrow_mut(|tls| {
+            let vulkan_ctx = &mut tls.as_mut().unwrap().vk_ctx;
+            vulkan_ctx.window.request_redraw();
+        })
     }
 }
 
@@ -330,7 +345,7 @@ impl VulkanCtx {
         }
     }
 
-    fn update_rectangles(&mut self, new_rects: &[RectData], vk_rects: &mut VkRects) {
+    fn update_rectangles(&mut self, new_rects: &[rect_storage::RectData], vk_rects: &mut VkRects) {
         // dbg!(&new_rects);
         unsafe {
             if vk_rects.capacity < new_rects.len() as u32 {
@@ -367,8 +382,6 @@ impl VulkanCtx {
                     ],
                     tex_position: rect.tex_position,
                     parent_idx: rect.parent_idx,
-                    children_start: rect.children_start,
-                    children_end: rect.children_end,
                     fill_kind: rect.fill_kind,
                 };
                 *ptr = rect;
@@ -376,6 +389,34 @@ impl VulkanCtx {
             }
 
             self.device.unmap_memory(vk_rects.memory);
+        }
+    }
+
+    fn update_indices(&mut self, new_indices: &[u32], vk_indices: &mut VkIndices) {
+        // dbg!(&new_rects);
+        unsafe {
+            if vk_indices.capacity < new_indices.len() as u32 {
+                self.device.destroy_buffer(vk_indices.buffer, None);
+                self.device.free_memory(vk_indices.memory, None);
+
+                *vk_indices = VkIndices::new(new_indices.len().next_power_of_two() as u32, &self);
+
+                vk_indices.write_to_descriptor_set(&self.device, self.descriptor_set);
+            }
+
+            let memory = self
+                .device
+                .map_memory(
+                    vk_indices.memory,
+                    0,
+                    vk_indices.capacity as u64 * mem::size_of::<u32>() as u64,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .unwrap() as *mut u32;
+
+            ptr::copy_nonoverlapping(new_indices.as_ptr(), memory, new_indices.len());
+
+            self.device.unmap_memory(vk_indices.memory);
         }
     }
 }
@@ -386,11 +427,17 @@ struct VkRects {
     capacity: u32,
 }
 
+struct VkIndices {
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+    capacity: u32,
+}
+
 unsafe fn create_buffer(
     device: &ash::Device,
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
-    size: u32,
+    size: u64,
     usage: vk::BufferUsageFlags,
     memory_property_flags: vk::MemoryPropertyFlags,
 ) -> (vk::Buffer, vk::DeviceMemory) {
@@ -398,7 +445,7 @@ unsafe fn create_buffer(
         .create_buffer(
             &vk::BufferCreateInfo::default()
                 .usage(usage)
-                .size(size as u64 * mem::size_of::<VkRect>() as u64),
+                .size(size as u64),
             None,
         )
         .unwrap();
@@ -435,6 +482,42 @@ unsafe fn create_buffer(
     (buffer, memory)
 }
 
+impl VkIndices {
+    fn new(capacity: u32, vk_ctx: &VulkanCtx) -> Self {
+        unsafe {
+            let (buffer, memory) = create_buffer(
+                &vk_ctx.device,
+                &vk_ctx.instance,
+                vk_ctx.physical_device,
+                capacity as u64 * mem::size_of::<u32>() as u64,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            );
+
+            Self {
+                buffer,
+                memory,
+                capacity,
+            }
+        }
+    }
+
+    fn write_to_descriptor_set(&self, device: &ash::Device, descriptor_set: vk::DescriptorSet) {
+        unsafe {
+            device.update_descriptor_sets(
+                &[vk::WriteDescriptorSet::default()
+                    .dst_set(descriptor_set)
+                    .dst_binding(1)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(&[vk::DescriptorBufferInfo::default()
+                        .buffer(self.buffer)
+                        .range(vk::WHOLE_SIZE)])],
+                &[],
+            );
+        }
+    }
+}
+
 impl VkRects {
     fn new(capacity: u32, vk_ctx: &VulkanCtx) -> Self {
         unsafe {
@@ -442,7 +525,7 @@ impl VkRects {
                 &vk_ctx.device,
                 &vk_ctx.instance,
                 vk_ctx.physical_device,
-                capacity as u32,
+                capacity as u64 * mem::size_of::<VkRect>() as u64,
                 vk::BufferUsageFlags::STORAGE_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             );
@@ -863,7 +946,7 @@ struct FrameCtx {
     rendered: vk::Semaphore,
 }
 
-impl<A: App> winit::application::ApplicationHandler<A::Event> for WinitApp<A> {
+impl<S: State> winit::application::ApplicationHandler<S::Event> for WinitApp<S> {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let window = event_loop
             .create_window(WindowAttributes::default())
@@ -875,6 +958,8 @@ impl<A: App> winit::application::ApplicationHandler<A::Event> for WinitApp<A> {
         let view_ctx = ViewCtx::new(&vulkan_ctx, None).unwrap();
         let mut vk_rects = VkRects::new(1024, &vulkan_ctx);
         vk_rects.write_to_descriptor_set(&vulkan_ctx.device, vulkan_ctx.descriptor_set);
+        let mut vk_indices = VkIndices::new(1024, &vulkan_ctx);
+        vk_indices.write_to_descriptor_set(&vulkan_ctx.device, vulkan_ctx.descriptor_set);
 
         let atlas = Atlas::new(&vulkan_ctx);
 
@@ -886,23 +971,8 @@ impl<A: App> winit::application::ApplicationHandler<A::Event> for WinitApp<A> {
             text_renderer: TextRenderer::new(),
         }));
 
-        self.app.init(
-            &self.root,
-            size.width,
-            size.height,
-            self.event_channel.clone(),
-        );
-
-        TLS.with_borrow_mut(|tls| {
-            STORAGE.with_borrow(|storage| {
-                tls.as_mut()
-                    .unwrap()
-                    .vk_ctx
-                    .update_rectangles(storage.allocated_span(), &mut vk_rects)
-            });
-        });
-
         self.vk_rects = Some(vk_rects);
+        self.vk_indices = Some(vk_indices);
         self.view_ctx = Some(view_ctx);
     }
 
@@ -921,8 +991,17 @@ impl<A: App> winit::application::ApplicationHandler<A::Event> for WinitApp<A> {
                     self.render_start = Some(Instant::now());
                 }
 
-                TLS.with_borrow(|tls| {
-                    let vulkan_ctx = &tls.as_ref().unwrap().vk_ctx;
+                let root = self.app.state.render();
+
+                TLS.with_borrow_mut(|tls| {
+                    let vulkan_ctx = &mut tls.as_mut().unwrap().vk_ctx;
+                    rect_storage::with_all_rects(|new_rects| {
+                        vulkan_ctx.update_rectangles(new_rects, self.vk_rects.as_mut().unwrap());
+                    });
+                    vulkan_ctx.update_indices(
+                        &root.get_flat_idx_list(),
+                        self.vk_indices.as_mut().unwrap(),
+                    );
 
                     if self.recreate_swapchain {
                         if let Some(render_start) = self.render_start {
@@ -1164,9 +1243,6 @@ impl<A: App> winit::application::ApplicationHandler<A::Event> for WinitApp<A> {
                 });
             },
             WindowEvent::Resized(size) => {
-                if self.vk_rects.is_some() {
-                    self.app.on_resize(size.width, size.height);
-                }
                 self.flush_rects_and_request_render();
             }
             WindowEvent::ModifiersChanged(modifiers) => {
@@ -1181,8 +1257,13 @@ impl<A: App> winit::application::ApplicationHandler<A::Event> for WinitApp<A> {
                     return;
                 }
 
-                self.app
-                    .on_key_event(event.logical_key.as_ref(), self.modifiers.state());
+                S::on_key_event(
+                    &mut self.app,
+                    KeyEvent {
+                        key: event.logical_key.as_ref(),
+                        modifiers: self.modifiers.state(),
+                    },
+                );
 
                 self.flush_rects_and_request_render();
             }
@@ -1190,15 +1271,10 @@ impl<A: App> winit::application::ApplicationHandler<A::Event> for WinitApp<A> {
         }
     }
 
-    fn user_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, event: A::Event) {
-        self.app.on_event(event);
+    fn user_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, event: S::Event) {
+        S::on_event(&mut self.app, event);
         self.flush_rects_and_request_render();
     }
-}
-
-pub fn debug() {
-    STORAGE.with_borrow(|s| eprintln!("{:?}", s.allocated_span()));
-    STORAGE.with_borrow(|s| eprintln!("{:?}", s.allocated_ref_span()));
 }
 
 #[derive(Clone, Copy)]
@@ -1209,8 +1285,6 @@ struct VkRect {
     bg_color: [f32; 4],
     tex_position: [u32; 2],
     parent_idx: u32,
-    children_start: u32,
-    children_end: u32,
     fill_kind: u32,
 }
 
@@ -1253,7 +1327,7 @@ impl TextLine {
         self.rect.clear_children();
 
         for glyph in &line.glyphs {
-            let child = self.rect.new_child();
+            let child = Rect::new();
             // dbg!(&child);
             child.set_size(glyph.width as u32, glyph.height as u32);
             child.set_pos(
@@ -1262,6 +1336,7 @@ impl TextLine {
             );
             // dbg!(glyph.texture_x, glyph.texture_y);
             child.set_tex_position([glyph.texture_x, glyph.texture_y]);
+            self.rect.append_child(child);
         }
 
         self.rect
@@ -1476,91 +1551,4 @@ impl Tls {
 
 thread_local! {
     static TLS: RefCell<Option<Tls>> = RefCell::new(None);
-    static STORAGE: RefCell<RectStorage> = RefCell::new(RectStorage::new());
-}
-
-#[derive(Debug)]
-pub struct Rect {
-    ref_idx: RefIdx,
-}
-
-impl Rect {
-    pub fn new() -> Self {
-        STORAGE.with_borrow_mut(|storage| Rect {
-            ref_idx: storage.new_rect(),
-        })
-    }
-
-    pub fn new_child(&self) -> Self {
-        STORAGE.with_borrow_mut(|storage| Rect {
-            ref_idx: storage.new_child(self.ref_idx),
-        })
-    }
-
-    pub fn new_child_at(&self, idx: u32) -> Self {
-        STORAGE.with_borrow_mut(|storage| Rect {
-            ref_idx: storage.new_child_at(idx, self.ref_idx),
-        })
-    }
-
-    pub fn clear_children(&self) {
-        STORAGE.with_borrow_mut(|storage| storage.clear_children(self.ref_idx))
-    }
-
-    pub fn remove_from_parent(&self) {
-        STORAGE.with_borrow_mut(|storage| storage.remove_from_parent(self.ref_idx))
-    }
-
-    pub fn new_text_child(&self) -> TextLine {
-        let rect = self.new_child();
-        TextLine {
-            rect,
-            clusters: vec![],
-        }
-    }
-
-    pub fn set_bg_color(&self, color: [u8; 4]) {
-        STORAGE.with_borrow_mut(|storage| storage.set_bg_color(self.ref_idx, color))
-    }
-
-    pub fn set_tex_position(&self, tex_position: [u32; 2]) {
-        STORAGE.with_borrow_mut(|storage| storage.set_tex_position(self.ref_idx, tex_position))
-    }
-
-    pub fn set_size(&self, width: u32, height: u32) {
-        STORAGE.with_borrow_mut(|storage| storage.set_size(self.ref_idx, width, height))
-    }
-
-    pub fn set_pos(&self, x: i32, y: i32) {
-        STORAGE.with_borrow_mut(|storage| storage.set_pos(self.ref_idx, x, y))
-    }
-
-    pub fn get_size(&self) -> (u32, u32) {
-        STORAGE.with_borrow_mut(|storage| storage.get_size(self.ref_idx))
-    }
-
-    pub fn append_child(&self, child: &Rect) {
-        STORAGE.with_borrow_mut(|storage| storage.append_child(self.ref_idx, child.ref_idx))
-    }
-
-    // pub fn debug(&self) {
-    //     STORAGE.with_borrow_mut(|storage| storage.debug(self))
-    // }
-}
-
-impl Drop for Rect {
-    fn drop(&mut self) {
-        STORAGE.with_borrow_mut(|storage| {
-            storage.decrement_ref_count(self.ref_idx);
-        })
-    }
-}
-
-impl Clone for Rect {
-    fn clone(&self) -> Self {
-        STORAGE.with_borrow_mut(|storage| storage.increment_ref_count(self.ref_idx));
-        Rect {
-            ref_idx: self.ref_idx,
-        }
-    }
 }
